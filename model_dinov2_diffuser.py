@@ -214,7 +214,7 @@ class DINOv2Diffuser(nn.Module):
         p = self.patch_size[0]
         c = 3
         x = x.reshape(shape=(x.shape[0], h, w, p, p, c))
-        x = torch.einsum('bhwpqc->bchwqp', x)
+        x = torch.einsum('bhwpqc->bchpwq', x)
         return x.reshape(shape=(x.shape[0], c, h * p, w * p))
 
 

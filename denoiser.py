@@ -1,6 +1,13 @@
 import torch
 import torch.nn as nn
 from model_jit import JiT_models
+from model_dinov2_diffuser import DINOv2_JiT_S_14, DINOv2_JiT_B_14
+
+# extend registry with DINOv2 variants
+JiT_models.update({
+    'DINOv2-JiT-S/14': DINOv2_JiT_S_14,
+    'DINOv2-JiT-B/14': DINOv2_JiT_B_14,
+})
 
 
 class Denoiser(nn.Module):
