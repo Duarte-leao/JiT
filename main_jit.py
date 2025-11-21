@@ -114,7 +114,7 @@ def get_args_parser():
     parser.add_argument('--wandb_project', default='dinov2-jit-validation', type=str, help='W&B project name')
     parser.add_argument('--wandb_entity', default=None, type=str, help='W&B entity (optional)')
     parser.add_argument('--wandb_run_name', default=None, type=str, help='W&B run name (optional)')
-    parser.add_argument('--recons_freq', default=0, type=int, help='Epoch frequency for reconstruction logging (0 to disable)')
+    parser.add_argument('--recons_freq', default=1, type=int, help='Epoch frequency for reconstruction logging (0 to disable)')
     parser.add_argument('--num_recons', default=16, type=int, help='Number of validation examples for recon grids')
     parser.add_argument('--restoration_eval_freq', default=5, type=int, help='Epoch frequency for restoration eval (PSNR/LPIPS)')
     parser.add_argument('--restoration_eval_num', default=8, type=int, help='Number of validation samples for restoration eval')
@@ -274,6 +274,9 @@ def main(args):
         if args.recons_freq > 0 and epoch % args.recons_freq == 0 and misc.is_main_process():
             from engine_jit import run_reconstructions  # local import to avoid circular deps
             run_reconstructions(model_without_ddp, data_loader_val, device, epoch, args)
+            from engine_jit import run_clean_reconstruction
+            setattr(run_clean_reconstruction, "_log_writer", log_writer)
+            run_clean_reconstruction(model_without_ddp, data_loader_val, device, epoch, args)
 
         # Multi-step recon visualizer (main process only)
         if args.recons_multistep_freq > 0 and epoch % args.recons_multistep_freq == 0 and misc.is_main_process() and log_writer is not None:

@@ -244,7 +244,9 @@ def run_restoration_eval(model_without_ddp, data_loader_val, device, epoch, args
             model_without_ddp.train()
         return
 
-    x = torch.cat(imgs, dim=0)[:args.restoration_eval_num].to(device, non_blocking=True).float().div_(255)
+    x = torch.cat(imgs, dim=0)[:args.restoration_eval_num].to(device, non_blocking=True).float()
+    if x.max() > 1.0:
+        x.div_(255)
     y = torch.cat(labels, dim=0)[:args.restoration_eval_num].to(device, non_blocking=True)
     x = x * 2.0 - 1.0  # [-1,1]
 
@@ -360,7 +362,9 @@ def run_multistep_restoration(model_without_ddp, data_loader_val, device, epoch,
             model_without_ddp.train()
         return
 
-    x = torch.cat(imgs, dim=0)[:args.restoration_eval_num].to(device, non_blocking=True).float().div_(255)
+    x = torch.cat(imgs, dim=0)[:args.restoration_eval_num].to(device, non_blocking=True).float()
+    if x.max() > 1.0:
+        x.div_(255)
     y = torch.cat(labels, dim=0)[:args.restoration_eval_num].to(device, non_blocking=True)
     x = x * 2.0 - 1.0  # [-1,1]
 
@@ -498,7 +502,9 @@ def run_reconstructions(model_without_ddp, data_loader_val, device, epoch, args)
         if was_training:
             model_without_ddp.train()
         return
-    x = torch.cat(imgs, dim=0)[:args.num_recons].to(device, non_blocking=True).float().div_(255)
+    x = torch.cat(imgs, dim=0)[:args.num_recons].to(device, non_blocking=True).float()
+    if x.max() > 1.0:
+        x.div_(255)
     y = torch.cat(labels, dim=0)[:args.num_recons].to(device, non_blocking=True)
     x = x * 2.0 - 1.0  # [-1,1]
 
@@ -540,6 +546,111 @@ def run_reconstructions(model_without_ddp, data_loader_val, device, epoch, args)
             wandb.log({"reconstructions": wandb.Image(save_path, caption=caption)}, step=eval_step)
         except Exception as e:
             print(f"W&B image log warning: {e}")
+
+    # restore state
+    model_without_ddp.load_state_dict(model_state_dict)
+    if was_training:
+        model_without_ddp.train()
+
+
+@torch.no_grad()
+def run_clean_reconstruction(model_without_ddp, data_loader_val, device, epoch, args):
+    """
+    Clean reconstruction visualizer: tests identity capability at t=0 without mosaic corruption.
+    Uses EMA weights, ground-truth labels, and logs PSNR/LPIPS plus a two-row grid.
+    """
+    if data_loader_val is None or args.num_recons <= 0:
+        return
+
+    # swap to EMA weights (first EMA) like evaluate
+    model_state_dict = copy.deepcopy(model_without_ddp.state_dict())
+    ema_state_dict = copy.deepcopy(model_without_ddp.state_dict())
+    for i, (name, _value) in enumerate(model_without_ddp.named_parameters()):
+        assert name in ema_state_dict
+        ema_state_dict[name] = model_without_ddp.ema_params1[i]
+    model_without_ddp.load_state_dict(ema_state_dict)
+
+    was_training = model_without_ddp.training
+    model_without_ddp.eval()
+
+    # fixed subset
+    imgs = []
+    labels = []
+    it = iter(data_loader_val)
+    while len(imgs) < args.num_recons:
+        try:
+            batch_imgs, batch_labels = next(it)
+        except StopIteration:
+            break
+        imgs.append(batch_imgs)
+        labels.append(batch_labels)
+    if len(imgs) == 0:
+        model_without_ddp.load_state_dict(model_state_dict)
+        if was_training:
+            model_without_ddp.train()
+        return
+    x = torch.cat(imgs, dim=0)[:args.num_recons].to(device, non_blocking=True).float()
+    if x.max() > 1.0:
+        x.div_(255)
+    y = torch.cat(labels, dim=0)[:args.num_recons].to(device, non_blocking=True)
+    x = x * 2.0 - 1.0  # [-1,1]
+
+    # zero timestep
+    t = torch.zeros(x.size(0), device=device, dtype=x.dtype)
+
+    # forward pass (no label drop, cfg=1)
+    x_rec = model_without_ddp.net(x, t, y)
+
+    def denorm(tensor):
+        return torch.clamp((tensor + 1) / 2, 0.0, 1.0)
+
+    x_gt = denorm(x)
+    x_pd = denorm(x_rec)
+
+    # metrics
+    mse = (x_gt - x_pd).pow(2).flatten(1).mean(dim=1)
+    psnr = -10.0 * torch.log10(mse.clamp_min(1e-10))
+    psnr_mean = psnr.mean().item()
+
+    lpips_loss_fn = _optional_lpips()
+    lpips_val = None
+    if lpips_loss_fn is not None:
+        lpips_loss_fn = lpips_loss_fn.to(device)
+        lpips_vals = lpips_loss_fn(x, x_rec).flatten()
+        lpips_val = lpips_vals.mean().item()
+
+    # grid: two-row (clean on top, recon on bottom)
+    panels = []
+    for i in range(x_gt.size(0)):
+        panel = torch.cat([x_gt[i], x_pd[i]], dim=1)  # stack vertically
+        panels.append(panel)
+        if len(panels) >= 32:
+            break
+    grid = vutils.make_grid(panels, nrow=int(len(panels) ** 0.5) or 1)
+
+    save_dir = os.path.join(args.output_dir, "images")
+    os.makedirs(save_dir, exist_ok=True)
+    save_path = os.path.join(save_dir, f"epoch_{epoch}_clean.png")
+    vutils.save_image(grid, save_path)
+
+    # wandb logging
+    if getattr(args, "use_wandb", False) and misc.is_main_process():
+        try:
+            import wandb
+            eval_step = (epoch + 1) * args.steps_per_epoch
+            log_payload = {'val/clean_reconstruction_psnr': psnr_mean}
+            if lpips_val is not None:
+                log_payload['val/clean_reconstruction_lpips'] = lpips_val
+            caption = f"epoch {epoch}, clean reconstruction"
+            wandb.log(log_payload, step=eval_step)
+            wandb.log({"validation/clean_reconstruction": wandb.Image(save_path, caption=caption)}, step=eval_step)
+        except Exception as e:
+            print(f"W&B clean recon log warning: {e}")
+
+    if log_writer := getattr(run_clean_reconstruction, "_log_writer", None):
+        log_writer.add_scalar('val/clean_reconstruction_psnr', psnr_mean, (epoch + 1) * args.steps_per_epoch)
+        if lpips_val is not None:
+            log_writer.add_scalar('val/clean_reconstruction_lpips', lpips_val, (epoch + 1) * args.steps_per_epoch)
 
     # restore state
     model_without_ddp.load_state_dict(model_state_dict)
