@@ -241,22 +241,32 @@ class Denoiser(nn.Module):
         z = torch.randn(n, device=device) * self.P_std + self.P_mean
         return torch.sigmoid(z)
 
+    def _compute_losses(self, x, z, t, x_pred):
+        """
+        Compute Flow Matching loss (v-space) and x-space MSE.
+        All tensors are expected to be in image space [-1, 1] with shape (B, C, H, W).
+        """
+        t_view = t.view(-1, *([1] * (x.ndim - 1)))
+
+        # Flow Matching targets/preds
+        v_target = (x - z) / (1 - t_view).clamp_min(self.t_eps)
+        v_pred = (x_pred - z) / (1 - t_view).clamp_min(self.t_eps)
+
+        loss_v = (v_target - v_pred) ** 2
+        loss_v = loss_v.mean(dim=(1, 2, 3)).mean()
+
+        # x-space diagnostic
+        x_mse = ((x - x_pred) ** 2).mean(dim=(1, 2, 3)).mean()
+        return loss_v, x_mse
+
     def forward(self, x, labels):
         labels_dropped = self.drop_labels(labels) if self.training else labels
 
         z, t = self.mosaic_engine.corrupt(x, self.sample_t)
-        t_view = t.view(-1, *([1] * (x.ndim - 1)))
-
-        v = (x - z) / (1 - t_view).clamp_min(self.t_eps)
-
         x_pred = self.net(z, t, labels_dropped)
-        v_pred = (x_pred - z) / (1 - t_view).clamp_min(self.t_eps)
 
-        # l2 loss
-        loss = (v - v_pred) ** 2
-        loss = loss.mean(dim=(1, 2, 3)).mean()
-
-        return loss
+        loss_v, x_mse = self._compute_losses(x, z, t, x_pred)
+        return loss_v, x_mse
 
     @torch.no_grad()
     def generate(self, labels):

@@ -20,6 +20,7 @@ def train_one_epoch(model, model_without_ddp, data_loader, optimizer, device, ep
     metric_logger = misc.MetricLogger(delimiter="  ")
     metric_logger.add_meter('lr', misc.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     metric_logger.add_meter('stage', misc.SmoothedValue(window_size=1, fmt='{value:d}'))
+    metric_logger.add_meter('x_mse', misc.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     header = 'Epoch: [{}]'.format(epoch)
     print_freq = 20
 
@@ -54,9 +55,14 @@ def train_one_epoch(model, model_without_ddp, data_loader, optimizer, device, ep
         labels = labels.to(device, non_blocking=True)
 
         with torch.amp.autocast('cuda', dtype=torch.bfloat16):
-            loss = model(x, labels)
+            loss_out = model(x, labels)
+            if isinstance(loss_out, tuple):
+                loss, x_mse = loss_out
+            else:
+                loss, x_mse = loss_out, None
 
         loss_value = loss.item()
+        x_mse_value = x_mse.item() if x_mse is not None else None
         if not math.isfinite(loss_value):
             print("Loss is {}, stopping training".format(loss_value))
             sys.exit(1)
@@ -74,8 +80,11 @@ def train_one_epoch(model, model_without_ddp, data_loader, optimizer, device, ep
         metric_logger.update(lr=lr)
         if curriculum_state:
             metric_logger.update(stage=int(curriculum_state.get("stage", 0)))
+        if x_mse_value is not None:
+            metric_logger.update(x_mse=x_mse_value)
 
         loss_value_reduce = misc.all_reduce_mean(loss_value)
+        x_mse_reduce = misc.all_reduce_mean(x_mse_value) if x_mse_value is not None else None
 
         if log_writer is not None:
             # Use epoch_1000x as the x-axis in TensorBoard to calibrate curves.
@@ -83,6 +92,8 @@ def train_one_epoch(model, model_without_ddp, data_loader, optimizer, device, ep
             if data_iter_step % args.log_freq == 0:
                 log_writer.add_scalar('train_loss', loss_value_reduce, epoch_1000x)
                 log_writer.add_scalar('lr', lr, epoch_1000x)
+                if x_mse_reduce is not None:
+                    log_writer.add_scalar('train/x_mse', x_mse_reduce, epoch_1000x)
                 # curriculum metrics
                 if curriculum_state is not None:
                     log_writer.add_scalar('curriculum/stage', curriculum_state.get("stage", 0), epoch_1000x)
@@ -97,6 +108,8 @@ def train_one_epoch(model, model_without_ddp, data_loader, optimizer, device, ep
                     try:
                         import wandb
                         log_payload = {'train/loss': loss_value_reduce, 'train/lr': lr, 'train/epoch': epoch}
+                        if x_mse_reduce is not None:
+                            log_payload['train/x_mse'] = x_mse_reduce
                         if curriculum_state is not None:
                             log_payload.update({
                                 'curriculum/stage': curriculum_state.get("stage", 0),
