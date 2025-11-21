@@ -116,6 +116,8 @@ def get_args_parser():
     parser.add_argument('--wandb_run_name', default=None, type=str, help='W&B run name (optional)')
     parser.add_argument('--recons_freq', default=0, type=int, help='Epoch frequency for reconstruction logging (0 to disable)')
     parser.add_argument('--num_recons', default=16, type=int, help='Number of validation examples for recon grids')
+    parser.add_argument('--restoration_eval_freq', default=1, type=int, help='Epoch frequency for restoration eval (PSNR/LPIPS)')
+    parser.add_argument('--restoration_eval_num', default=8, type=int, help='Number of validation samples for restoration eval')
 
     return parser
 
@@ -271,6 +273,12 @@ def main(args):
             from engine_jit import run_reconstructions  # local import to avoid circular deps
             run_reconstructions(model_without_ddp, data_loader_val, device, epoch, args)
 
+        # Restoration eval (stage-aware) on main process
+        if args.restoration_eval_freq > 0 and epoch % args.restoration_eval_freq == 0 and misc.is_main_process() and log_writer is not None:
+            from engine_jit import run_restoration_eval
+            setattr(run_restoration_eval, "_log_writer", log_writer)
+            run_restoration_eval(model_without_ddp, data_loader_val, device, epoch, args)
+
         # Save checkpoint periodically
         if epoch % args.save_last_freq == 0 or epoch + 1 == args.epochs:
             misc.save_model(
@@ -289,12 +297,21 @@ def main(args):
                 epoch=epoch
             )
 
-        # Perform online evaluation at specified intervals
-        if args.online_eval and (epoch % args.eval_freq == 0 or epoch + 1 == args.epochs):
-            torch.cuda.empty_cache()
-            with torch.no_grad():
-                evaluate(model_without_ddp, args, epoch, batch_size=args.gen_bsz, log_writer=log_writer)
-            torch.cuda.empty_cache()
+        # Perform online evaluation (generative) at specified intervals, gated by stage
+        if args.online_eval:
+            run_gen_eval = False
+            if hasattr(model_without_ddp, "get_curriculum_state"):
+                state = model_without_ddp.get_curriculum_state()
+                if state and state.get("stage", 0) >= 3 and (epoch % args.eval_freq == 0 or epoch + 1 == args.epochs):
+                    run_gen_eval = True
+            elif (epoch % args.eval_freq == 0 or epoch + 1 == args.epochs):
+                run_gen_eval = True
+
+            if run_gen_eval:
+                torch.cuda.empty_cache()
+                with torch.no_grad():
+                    evaluate(model_without_ddp, args, epoch, batch_size=args.gen_bsz, log_writer=log_writer)
+                torch.cuda.empty_cache()
 
         if misc.is_main_process() and log_writer is not None:
             log_writer.flush()

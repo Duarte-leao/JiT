@@ -13,6 +13,7 @@ import torch_fidelity
 import copy
 import torchvision.utils as vutils
 from typing import Optional
+import math as pymath
 
 
 def train_one_epoch(model, model_without_ddp, data_loader, optimizer, device, epoch, log_writer=None, args=None):
@@ -186,6 +187,133 @@ def evaluate(model_without_ddp, args, epoch, batch_size=64, log_writer=None):
             cv2.imwrite(os.path.join(save_folder, '{}.png'.format(str(img_id).zfill(5))), gen_img)
 
     torch.distributed.barrier()
+
+
+@torch.no_grad()
+def _optional_lpips():
+    try:
+        import lpips
+        return lpips.LPIPS(net='vgg')
+    except Exception as e:
+        print(f"LPIPS not available ({e}); skipping LPIPS computation.")
+        return None
+
+
+@torch.no_grad()
+def run_restoration_eval(model_without_ddp, data_loader_val, device, epoch, args):
+    """
+    Stage-aware restoration evaluator: deterministic mosaic corruption, single-step prediction,
+    PSNR/LPIPS metrics, and triplet grid saving.
+    """
+    if data_loader_val is None or args.restoration_eval_freq <= 0 or args.restoration_eval_num <= 0:
+        return
+
+    # read curriculum stage
+    curriculum_state = model_without_ddp.get_curriculum_state() if hasattr(model_without_ddp, "get_curriculum_state") else None
+    if curriculum_state is None:
+        return
+    stage = curriculum_state.get("stage", 0)
+    if stage < 1:
+        return
+
+    # switch to EMA params
+    model_state_dict = copy.deepcopy(model_without_ddp.state_dict())
+    ema_state_dict = copy.deepcopy(model_without_ddp.state_dict())
+    for i, (name, _value) in enumerate(model_without_ddp.named_parameters()):
+        assert name in ema_state_dict
+        ema_state_dict[name] = model_without_ddp.ema_params1[i]
+    model_without_ddp.load_state_dict(ema_state_dict)
+
+    was_training = model_without_ddp.training
+    model_without_ddp.eval()
+
+    # collect fixed subset
+    imgs = []
+    labels = []
+    it = iter(data_loader_val)
+    while len(imgs) * data_loader_val.batch_size < args.restoration_eval_num:
+        try:
+            batch_imgs, batch_labels = next(it)
+        except StopIteration:
+            break
+        imgs.append(batch_imgs)
+        labels.append(batch_labels)
+    if len(imgs) == 0:
+        model_without_ddp.load_state_dict(model_state_dict)
+        if was_training:
+            model_without_ddp.train()
+        return
+
+    x = torch.cat(imgs, dim=0)[:args.restoration_eval_num].to(device, non_blocking=True).float().div_(255)
+    y = torch.cat(labels, dim=0)[:args.restoration_eval_num].to(device, non_blocking=True)
+    x = x * 2.0 - 1.0  # [-1,1]
+
+    # deterministic mosaic corruption
+    with torch.random.fork_rng():
+        torch.manual_seed(1234)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(1234)
+        z_mosaic, t = model_without_ddp.mosaic_engine.corrupt(x, model_without_ddp.sample_t)
+
+    # forward (no label drop, cfg=1)
+    x_pred = model_without_ddp.net(z_mosaic, t, y)
+
+    def denorm(tensor):
+        return torch.clamp((tensor + 1) / 2, 0.0, 1.0)
+
+    # metrics in image space [0,1]
+    x_gt = denorm(x)
+    x_pd = denorm(x_pred)
+    mse = (x_gt - x_pd).pow(2).flatten(1).mean(dim=1)
+    psnr = -10.0 * torch.log10(mse.clamp_min(1e-10))
+    psnr_mean = psnr.mean().item()
+
+    lpips_loss_fn = _optional_lpips()
+    lpips_val = None
+    if lpips_loss_fn is not None:
+        lpips_loss_fn = lpips_loss_fn.to(device)
+        # LPIPS expects [-1,1]
+        lpips_vals = lpips_loss_fn(x, x_pred).flatten()
+        lpips_val = lpips_vals.mean().item()
+
+    # grids
+    x_clean = x_gt.cpu()
+    x_input = denorm(z_mosaic).cpu()
+    x_out = x_pd.cpu()
+    panels = []
+    for i in range(x_clean.size(0)):
+        panel = torch.cat([x_clean[i], x_input[i], x_out[i]], dim=2)
+        panels.append(panel)
+        if len(panels) >= 32:  # keep grid manageable
+            break
+    grid = vutils.make_grid(panels, nrow=int(len(panels) ** 0.5) or 1)
+
+    save_dir = os.path.join(args.output_dir, "val_restoration", f"epoch_{epoch}")
+    os.makedirs(save_dir, exist_ok=True)
+    save_path = os.path.join(save_dir, "restoration.png")
+    vutils.save_image(grid, save_path)
+
+    # logging
+    if log_writer := getattr(run_restoration_eval, "_log_writer", None):
+        log_writer.add_scalar('val/restoration_psnr', psnr_mean, epoch)
+        if lpips_val is not None:
+            log_writer.add_scalar('val/restoration_lpips', lpips_val, epoch)
+
+    if getattr(args, "use_wandb", False) and misc.is_main_process():
+        try:
+            import wandb
+            log_payload = {'val/restoration_psnr': psnr_mean}
+            if lpips_val is not None:
+                log_payload['val/restoration_lpips'] = lpips_val
+            wandb.log(log_payload, step=epoch)
+            wandb.log({"val/restoration_grid": wandb.Image(save_path, caption=f"epoch {epoch}, stage {stage}")}, step=epoch)
+        except Exception as e:
+            print(f"W&B restoration log warning: {e}")
+
+    # restore state
+    model_without_ddp.load_state_dict(model_state_dict)
+    if was_training:
+        model_without_ddp.train()
 
     # back to no ema
     print("Switch back from ema")
