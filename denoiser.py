@@ -84,6 +84,99 @@ class MosaicNoisingEngine:
         return z_out, t
 
 
+class CurriculumController:
+    """
+    Coordinates curriculum stages across data corruption difficulty and backbone plasticity.
+    """
+    def __init__(self, total_epochs: int, mosaic_engine: MosaicNoisingEngine, backbone: nn.Module):
+        self.total_epochs = total_epochs
+        self.mosaic_engine = mosaic_engine
+        self.backbone = backbone
+        self.current_stage_idx = -1
+        self.backbone_state_code = 2  # default unfreeze
+        self.backbone_mode_str = "Unfrozen"
+
+        # Stage definitions using fractional start points
+        self.stages = [
+            {"start_frac": 0.0, "p_min": 0.10, "p_max": 0.30, "t_max": 0.3, "backbone_mode": "freeze"},
+            {"start_frac": 0.3, "p_min": 0.40, "p_max": 0.70, "t_max": 0.6, "backbone_mode": "unfreeze_last_4"},
+            {"start_frac": 0.7, "p_min": 0.80, "p_max": 1.00, "t_max": 1.0, "backbone_mode": "unfreeze_all"},
+        ]
+        for stage in self.stages:
+            stage["start_epoch"] = int(stage["start_frac"] * self.total_epochs)
+        self.stages = sorted(self.stages, key=lambda s: s["start_epoch"])
+
+    def _resolve_stage_idx(self, epoch: int) -> int:
+        """
+        Pick the stage with the largest start_epoch <= current epoch.
+        """
+        idx = 0
+        for i, stage in enumerate(self.stages):
+            if epoch >= stage["start_epoch"]:
+                idx = i
+            else:
+                break
+        return idx
+
+    def _apply_backbone_mode(self, mode: str):
+        """
+        Execute backbone freezing policy if available; record state code and label.
+        """
+        is_dino = hasattr(self.backbone, "freeze_backbone")
+        if mode == "freeze":
+            if is_dino:
+                self.backbone.freeze_backbone()
+            self.backbone_state_code = 0
+            self.backbone_mode_str = "Frozen"
+        elif mode == "unfreeze_last_4":
+            if is_dino:
+                self.backbone.unfreeze_last_blocks(4)
+            self.backbone_state_code = 1
+            self.backbone_mode_str = "Partial"
+        elif mode == "unfreeze_all":
+            if is_dino:
+                self.backbone.unfreeze_all()
+            self.backbone_state_code = 2
+            self.backbone_mode_str = "Unfrozen"
+        else:
+            # Unknown mode: fallback to no-op, mark as partial
+            self.backbone_state_code = 1
+            self.backbone_mode_str = mode
+
+    def set_epoch(self, epoch: int):
+        """
+        Update active stage based on epoch. Applies both data and backbone configs.
+        """
+        stage_idx = self._resolve_stage_idx(epoch)
+        if stage_idx == self.current_stage_idx:
+            return self.get_curriculum_state()
+
+        self.current_stage_idx = stage_idx
+        stage_cfg = self.stages[stage_idx]
+
+        # Push data difficulty
+        if self.mosaic_engine is not None:
+            self.mosaic_engine.update_stage(stage_cfg)
+
+        # Apply backbone mode (no-op for JiT)
+        self._apply_backbone_mode(stage_cfg.get("backbone_mode", "unfreeze_all"))
+
+        return self.get_curriculum_state()
+
+    def get_curriculum_state(self):
+        if self.current_stage_idx < 0 or self.current_stage_idx >= len(self.stages):
+            return None
+        stage_cfg = self.stages[self.current_stage_idx]
+        return {
+            "stage": self.current_stage_idx + 1,
+            "p_min": stage_cfg.get("p_min", 0.0),
+            "p_max": stage_cfg.get("p_max", 0.0),
+            "t_max": stage_cfg.get("t_max", 0.0),
+            "backbone_mode": self.backbone_mode_str,
+            "backbone_state_code": self.backbone_state_code,
+        }
+
+
 class Denoiser(nn.Module):
     def __init__(
         self,
@@ -127,28 +220,13 @@ class Denoiser(nn.Module):
         # mosaic noising engine (uses patch geometry from the backbone)
         patch_size = self.net.patch_size if isinstance(self.net.patch_size, int) else self.net.patch_size[0]
         self.mosaic_engine = MosaicNoisingEngine(img_size=self.img_size, patch_size=patch_size, device=torch.device(args.device))
+        # curriculum controller
+        self.curriculum = CurriculumController(total_epochs=args.epochs, mosaic_engine=self.mosaic_engine, backbone=self.net)
+        self.curriculum.set_epoch(args.start_epoch)
 
-        # curriculum stages: (end_epoch, stage_cfg, backbone_action)
-        # Defaults target ImageNette validation; adjust epochs as needed.
-        self.stage_schedule = [
-            (args.epochs // 3, {"p_min": 0.10, "p_max": 0.30, "t_max": 0.3}, "freeze"),
-            (2 * args.epochs // 3, {"p_min": 0.40, "p_max": 0.70, "t_max": 0.6}, "unfreeze_last"),
-            (args.epochs + 1, {"p_min": 0.80, "p_max": 1.00, "t_max": 1.0}, "unfreeze_all"),
-        ]
-        self.current_stage_idx = -1
-        # initialize stage 0
-        self.set_epoch(args.start_epoch)
-
-    def get_stage_info(self):
-        """Expose current curriculum stage and active parameters."""
-        if self.current_stage_idx < 0 or self.current_stage_idx >= len(self.stage_schedule):
-            return None
-        _, stage_cfg, _ = self.stage_schedule[self.current_stage_idx]
-        return {
-            "stage_id": self.current_stage_idx + 1,
-            "p_max": stage_cfg.get("p_max", 0.0),
-            "t_max": stage_cfg.get("t_max", 0.0),
-        }
+    def get_curriculum_state(self):
+        """Expose current curriculum state (stage + key parameters)."""
+        return self.curriculum.get_curriculum_state()
 
     def drop_labels(self, labels):
         drop = torch.rand(labels.shape[0], device=labels.device) < self.label_drop_prob
@@ -156,23 +234,8 @@ class Denoiser(nn.Module):
         return out
 
     def set_epoch(self, epoch: int):
-        """Update curriculum stage and backbone freezing according to current epoch."""
-        # find first schedule entry whose end_epoch is greater than epoch
-        for idx, (end_epoch, stage_cfg, action) in enumerate(self.stage_schedule):
-            if epoch < end_epoch:
-                # only react on stage change
-                if idx != self.current_stage_idx:
-                    self.current_stage_idx = idx
-                    self.mosaic_engine.update_stage(stage_cfg)
-                    if hasattr(self.net, "freeze_backbone"):
-                        if action == "freeze":
-                            self.net.freeze_backbone()
-                        elif action == "unfreeze_last":
-                            # default to last 4 blocks; adjust easily if needed
-                            self.net.unfreeze_last_blocks(4)
-                        elif action == "unfreeze_all":
-                            self.net.unfreeze_all()
-                break
+        """Delegate curriculum update to the controller."""
+        return self.curriculum.set_epoch(epoch)
 
     def sample_t(self, n: int, device=None):
         z = torch.randn(n, device=device) * self.P_std + self.P_mean

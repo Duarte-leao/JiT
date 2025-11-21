@@ -32,14 +32,17 @@ def train_one_epoch(model, model_without_ddp, data_loader, optimizer, device, ep
     if log_writer is not None:
         print('log_dir: {}'.format(log_writer.log_dir))
 
-    # static stage info for this epoch (used for logging/printing)
-    stage_info_epoch = None
-    if hasattr(model_without_ddp, "get_stage_info"):
-        stage_info_epoch = model_without_ddp.get_stage_info()
-        if stage_info_epoch:
-            print(f"Stage info: stage {stage_info_epoch.get('stage_id', 0)}, "
-                  f"p_max={stage_info_epoch.get('p_max', 0.0):.2f}, "
-                  f"t_max={stage_info_epoch.get('t_max', 0.0):.2f}")
+    # static curriculum state for this epoch (used for logging/printing)
+    curriculum_state = None
+    if hasattr(model_without_ddp, "get_curriculum_state"):
+        curriculum_state = model_without_ddp.get_curriculum_state()
+        if curriculum_state:
+            print(
+                f"Curriculum: stage {curriculum_state.get('stage', 0)}, "
+                f"p_max={curriculum_state.get('p_max', 0.0):.2f}, "
+                f"t_max={curriculum_state.get('t_max', 0.0):.2f}, "
+                f"backbone={curriculum_state.get('backbone_mode', 'n/a')}"
+            )
 
     for data_iter_step, (x, labels) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
         # per iteration (instead of per epoch) lr scheduler
@@ -69,8 +72,8 @@ def train_one_epoch(model, model_without_ddp, data_loader, optimizer, device, ep
         metric_logger.update(loss=loss_value)
         lr = optimizer.param_groups[0]["lr"]
         metric_logger.update(lr=lr)
-        if stage_info_epoch:
-            metric_logger.update(stage=int(stage_info_epoch.get("stage_id", 0)))
+        if curriculum_state:
+            metric_logger.update(stage=int(curriculum_state.get("stage", 0)))
 
         loss_value_reduce = misc.all_reduce_mean(loss_value)
 
@@ -81,22 +84,26 @@ def train_one_epoch(model, model_without_ddp, data_loader, optimizer, device, ep
                 log_writer.add_scalar('train_loss', loss_value_reduce, epoch_1000x)
                 log_writer.add_scalar('lr', lr, epoch_1000x)
                 # curriculum metrics
-                if stage_info_epoch is not None:
-                    log_writer.add_scalar('curriculum/stage', stage_info_epoch.get("stage_id", 0), epoch_1000x)
-                    if "p_max" in stage_info_epoch:
-                        log_writer.add_scalar('curriculum/p_max', stage_info_epoch["p_max"], epoch_1000x)
-                    if "t_max" in stage_info_epoch:
-                        log_writer.add_scalar('curriculum/t_max', stage_info_epoch["t_max"], epoch_1000x)
+                if curriculum_state is not None:
+                    log_writer.add_scalar('curriculum/stage', curriculum_state.get("stage", 0), epoch_1000x)
+                    if "p_max" in curriculum_state:
+                        log_writer.add_scalar('curriculum/p_max', curriculum_state["p_max"], epoch_1000x)
+                    if "t_max" in curriculum_state:
+                        log_writer.add_scalar('curriculum/t_max', curriculum_state["t_max"], epoch_1000x)
+                    if "backbone_state_code" in curriculum_state:
+                        log_writer.add_scalar('curriculum/backbone_state_code', curriculum_state["backbone_state_code"], epoch_1000x)
                 # wandb logging (main process only)
                 if getattr(args, "use_wandb", False) and misc.is_main_process():
                     try:
                         import wandb
                         log_payload = {'train/loss': loss_value_reduce, 'train/lr': lr, 'train/epoch': epoch}
-                        if stage_info_epoch is not None:
+                        if curriculum_state is not None:
                             log_payload.update({
-                                'curriculum/stage': stage_info_epoch.get("stage_id", 0),
-                                'curriculum/p_max': stage_info_epoch.get("p_max", 0.0),
-                                'curriculum/t_max': stage_info_epoch.get("t_max", 0.0),
+                                'curriculum/stage': curriculum_state.get("stage", 0),
+                                'curriculum/p_max': curriculum_state.get("p_max", 0.0),
+                                'curriculum/t_max': curriculum_state.get("t_max", 0.0),
+                                'curriculum/backbone_state_code': curriculum_state.get("backbone_state_code", 0),
+                                'curriculum/backbone_mode': curriculum_state.get("backbone_mode", ""),
                             })
                         wandb.log(log_payload, step=epoch_1000x)
                     except Exception as e:
@@ -270,11 +277,11 @@ def run_reconstructions(model_without_ddp, data_loader_val, device, epoch, args)
         try:
             import wandb
             stage_info = None
-            if hasattr(model_without_ddp, "get_stage_info"):
-                stage_info = model_without_ddp.get_stage_info()
+            if hasattr(model_without_ddp, "get_curriculum_state"):
+                stage_info = model_without_ddp.get_curriculum_state()
             caption = f"epoch {epoch}"
             if stage_info:
-                caption += f", stage {stage_info.get('stage_id', '')}"
+                caption += f", stage {stage_info.get('stage', '')}"
             wandb.log({"reconstructions": wandb.Image(save_path, caption=caption)}, step=epoch)
         except Exception as e:
             print(f"W&B image log warning: {e}")
