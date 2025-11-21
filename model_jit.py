@@ -392,3 +392,15 @@ JiT_models = {
     'JiT-H/16': JiT_H_16,
     'JiT-H/32': JiT_H_32,
 }
+
+# DINOv2-based diffuser backbones
+try:
+    from model_dinov2_diffuser import DINOv2_JiT_S_14, DINOv2_JiT_B_14
+
+    JiT_models.update({
+        'DINOv2-JiT-S/14': DINOv2_JiT_S_14,
+        'DINOv2-JiT-B/14': DINOv2_JiT_B_14,
+    })
+except Exception:
+    # Keep original JiT models available even if DINOv2 dependencies are missing.
+    pass
