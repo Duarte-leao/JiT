@@ -35,25 +35,25 @@ class MosaicNoisingEngine:
         self.p_max = stage_cfg.get("p_max", self.p_max)
         self.t_max = stage_cfg.get("t_max", self.t_max)
 
-    def _sample_mask(self, batch_size: int) -> torch.Tensor:
+    def _sample_mask(self, batch_size: int, device: torch.device) -> torch.Tensor:
         """
         Sample a per-image grid mask with exactly K noisy patches.
         Returns a mask of shape (B, 1, grid_h, grid_w).
         """
-        # one p per batch for stability (can extend to per-image if desired)
-        p = torch.empty(1, device=self.device).uniform_(self.p_min, self.p_max).item()
-        k = int(round(p * self.num_patches))
-        k = max(0, min(k, self.num_patches))
+        # per-image noise ratios
+        p = torch.rand(batch_size, device=device) * (self.p_max - self.p_min) + self.p_min
+        k = (p * self.num_patches).round().long().clamp_(0, self.num_patches)
 
-        mask_grid = torch.zeros(batch_size, self.num_patches, device=self.device)
-        if k > 0:
-            idx = torch.rand(batch_size, self.num_patches, device=self.device).argsort(dim=1)[:, :k]
-            # scatter 1s at selected indices
-            flat_indices = idx + torch.arange(batch_size, device=self.device).unsqueeze(1) * self.num_patches
-            mask_grid = mask_grid.view(-1)
-            mask_grid[flat_indices.reshape(-1)] = 1.0
-            mask_grid = mask_grid.view(batch_size, self.num_patches)
-        mask_grid = mask_grid.view(batch_size, 1, self.grid_h, self.grid_w)
+        noise = torch.rand(batch_size, self.num_patches, device=device)
+        noise_sorted, _ = noise.sort(dim=1)
+        idx = (self.num_patches - k).clamp(min=0, max=self.num_patches - 1).unsqueeze(1)
+        thresholds = torch.where(
+            k.unsqueeze(1) > 0,
+            noise_sorted.gather(1, idx),
+            torch.ones(batch_size, 1, device=device) * 2.0  # > 1 to force zeros when k=0
+        )
+        mask_flat = (noise >= thresholds).float()
+        mask_grid = mask_flat.view(batch_size, 1, self.grid_h, self.grid_w)
         return mask_grid
 
     def corrupt(self, x_start: torch.Tensor, sample_t_fn) -> tuple[torch.Tensor, torch.Tensor]:
@@ -64,9 +64,10 @@ class MosaicNoisingEngine:
             t:     clamped timesteps (B,)
         """
         bsz = x_start.shape[0]
+        device = x_start.device
 
         # timestep sampling and clamping per stage
-        t = sample_t_fn(bsz, device=x_start.device)
+        t = sample_t_fn(bsz, device=device)
         t = t.clamp(max=self.t_max)
         t_view = t.view(bsz, *([1] * (x_start.ndim - 1)))
 
@@ -75,7 +76,7 @@ class MosaicNoisingEngine:
         z_noisy = t_view * x_start + (1 - t_view) * e
 
         # patch mask generation on grid and upsample to pixel space
-        mask_grid = self._sample_mask(bsz)  # (B,1,grid_h,grid_w)
+        mask_grid = self._sample_mask(bsz, device=device)  # (B,1,grid_h,grid_w)
         mask_pixel = mask_grid.repeat_interleave(self.patch_size, dim=2).repeat_interleave(self.patch_size, dim=3)
 
         # compose mosaic
