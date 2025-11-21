@@ -56,7 +56,7 @@ class MosaicNoisingEngine:
         mask_grid = mask_flat.view(batch_size, 1, self.grid_h, self.grid_w)
         return mask_grid
 
-    def corrupt(self, x_start: torch.Tensor, sample_t_fn) -> tuple[torch.Tensor, torch.Tensor]:
+    def corrupt(self, x_start: torch.Tensor, sample_t_fn, fixed_t: float = None) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Apply mosaic corruption to x_start.
         Returns:
@@ -66,9 +66,12 @@ class MosaicNoisingEngine:
         bsz = x_start.shape[0]
         device = x_start.device
 
-        # timestep sampling and clamping per stage
-        t = sample_t_fn(bsz, device=device)
-        t = t.clamp(max=self.t_max)
+        # timestep sampling and clamping per stage (or fixed)
+        if fixed_t is not None:
+            t = torch.full((bsz,), float(fixed_t), device=device, dtype=x_start.dtype)
+        else:
+            t = sample_t_fn(bsz, device=device)
+            t = t.clamp(max=self.t_max)
         t_view = t.view(bsz, *([1] * (x_start.ndim - 1)))
 
         # full noisy candidate

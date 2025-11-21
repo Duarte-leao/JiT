@@ -116,8 +116,9 @@ def get_args_parser():
     parser.add_argument('--wandb_run_name', default=None, type=str, help='W&B run name (optional)')
     parser.add_argument('--recons_freq', default=0, type=int, help='Epoch frequency for reconstruction logging (0 to disable)')
     parser.add_argument('--num_recons', default=16, type=int, help='Number of validation examples for recon grids')
-    parser.add_argument('--restoration_eval_freq', default=1, type=int, help='Epoch frequency for restoration eval (PSNR/LPIPS)')
+    parser.add_argument('--restoration_eval_freq', default=5, type=int, help='Epoch frequency for restoration eval (PSNR/LPIPS)')
     parser.add_argument('--restoration_eval_num', default=8, type=int, help='Number of validation samples for restoration eval')
+    parser.add_argument('--recons_multistep_freq', default=20, type=int, help='Epoch frequency for multi-step restoration visualization (0 to disable)')
 
     return parser
 
@@ -168,6 +169,7 @@ def main(args):
         pin_memory=args.pin_mem,
         drop_last=True
     )
+    args.steps_per_epoch = len(data_loader_train)
 
     # Validation loader for reconstructions (rank 0 only will use it)
     transform_val = transforms.Compose([
@@ -272,6 +274,12 @@ def main(args):
         if args.recons_freq > 0 and epoch % args.recons_freq == 0 and misc.is_main_process():
             from engine_jit import run_reconstructions  # local import to avoid circular deps
             run_reconstructions(model_without_ddp, data_loader_val, device, epoch, args)
+
+        # Multi-step recon visualizer (main process only)
+        if args.recons_multistep_freq > 0 and epoch % args.recons_multistep_freq == 0 and misc.is_main_process() and log_writer is not None:
+            from engine_jit import run_multistep_restoration
+            setattr(run_multistep_restoration, "_log_writer", log_writer)
+            run_multistep_restoration(model_without_ddp, data_loader_val, device, epoch, args)
 
         # Restoration eval (stage-aware) on main process
         if args.restoration_eval_freq > 0 and epoch % args.restoration_eval_freq == 0 and misc.is_main_process() and log_writer is not None:

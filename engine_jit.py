@@ -88,22 +88,22 @@ def train_one_epoch(model, model_without_ddp, data_loader, optimizer, device, ep
         x_mse_reduce = misc.all_reduce_mean(x_mse_value) if x_mse_value is not None else None
 
         if log_writer is not None:
-            # Use epoch_1000x as the x-axis in TensorBoard to calibrate curves.
-            epoch_1000x = int((data_iter_step / len(data_loader) + epoch) * 1000)
+            # Use a monotonically increasing step across epochs/iters
+            global_step = data_iter_step + epoch * args.steps_per_epoch
             if data_iter_step % args.log_freq == 0:
-                log_writer.add_scalar('train_loss', loss_value_reduce, epoch_1000x)
-                log_writer.add_scalar('lr', lr, epoch_1000x)
+                log_writer.add_scalar('train_loss', loss_value_reduce, global_step)
+                log_writer.add_scalar('lr', lr, global_step)
                 if x_mse_reduce is not None:
-                    log_writer.add_scalar('train/x_mse', x_mse_reduce, epoch_1000x)
+                    log_writer.add_scalar('train/x_mse', x_mse_reduce, global_step)
                 # curriculum metrics
                 if curriculum_state is not None:
-                    log_writer.add_scalar('curriculum/stage', curriculum_state.get("stage", 0), epoch_1000x)
+                    log_writer.add_scalar('curriculum/stage', curriculum_state.get("stage", 0), global_step)
                     if "p_max" in curriculum_state:
-                        log_writer.add_scalar('curriculum/p_max', curriculum_state["p_max"], epoch_1000x)
+                        log_writer.add_scalar('curriculum/p_max', curriculum_state["p_max"], global_step)
                     if "t_max" in curriculum_state:
-                        log_writer.add_scalar('curriculum/t_max', curriculum_state["t_max"], epoch_1000x)
+                        log_writer.add_scalar('curriculum/t_max', curriculum_state["t_max"], global_step)
                     if "backbone_state_code" in curriculum_state:
-                        log_writer.add_scalar('curriculum/backbone_state_code', curriculum_state["backbone_state_code"], epoch_1000x)
+                        log_writer.add_scalar('curriculum/backbone_state_code', curriculum_state["backbone_state_code"], global_step)
                 # wandb logging (main process only)
                 if getattr(args, "use_wandb", False) and misc.is_main_process():
                     try:
@@ -119,7 +119,7 @@ def train_one_epoch(model, model_without_ddp, data_loader, optimizer, device, ep
                                 'curriculum/backbone_state_code': curriculum_state.get("backbone_state_code", 0),
                                 'curriculum/backbone_mode': curriculum_state.get("backbone_mode", ""),
                             })
-                        wandb.log(log_payload, step=epoch_1000x)
+                        wandb.log(log_payload, step=global_step)
                     except Exception as e:
                         # keep training even if wandb log fails
                         print(f"W&B log warning: {e}")
@@ -302,11 +302,12 @@ def run_restoration_eval(model_without_ddp, data_loader_val, device, epoch, args
     if getattr(args, "use_wandb", False) and misc.is_main_process():
         try:
             import wandb
+            eval_step = (epoch + 1) * args.steps_per_epoch
             log_payload = {'val/restoration_psnr': psnr_mean}
             if lpips_val is not None:
                 log_payload['val/restoration_lpips'] = lpips_val
-            wandb.log(log_payload, step=epoch)
-            wandb.log({"val/restoration_grid": wandb.Image(save_path, caption=f"epoch {epoch}, stage {stage}")}, step=epoch)
+            wandb.log(log_payload, step=eval_step)
+            wandb.log({"val/restoration_grid": wandb.Image(save_path, caption=f"epoch {epoch}, stage {stage}")}, step=eval_step)
         except Exception as e:
             print(f"W&B restoration log warning: {e}")
 
@@ -315,38 +316,150 @@ def run_restoration_eval(model_without_ddp, data_loader_val, device, epoch, args
     if was_training:
         model_without_ddp.train()
 
-    # back to no ema
-    print("Switch back from ema")
-    model_without_ddp.load_state_dict(model_state_dict)
 
-    # compute FID and IS
-    if log_writer is not None:
-        if args.img_size == 256:
-            fid_statistics_file = 'fid_stats/jit_in256_stats.npz'
-        elif args.img_size == 512:
-            fid_statistics_file = 'fid_stats/jit_in512_stats.npz'
+@torch.no_grad()
+def run_multistep_restoration(model_without_ddp, data_loader_val, device, epoch, args):
+    """
+    Multi-step restoration visualizer: starts from fixed-t mosaic, integrates t_max->0 with ODE steps,
+    compares single-step vs multi-step outputs, and logs PSNR/LPIPS plus a quad grid.
+    """
+    if data_loader_val is None or args.recons_multistep_freq <= 0 or args.restoration_eval_num <= 0:
+        return
+
+    # curriculum state for t_max
+    curriculum_state = model_without_ddp.get_curriculum_state() if hasattr(model_without_ddp, "get_curriculum_state") else None
+    if curriculum_state is None:
+        return
+    t_max = float(curriculum_state.get("t_max", 1.0))
+
+    # swap to EMA params
+    model_state_dict = copy.deepcopy(model_without_ddp.state_dict())
+    ema_state_dict = copy.deepcopy(model_without_ddp.state_dict())
+    for i, (name, _value) in enumerate(model_without_ddp.named_parameters()):
+        assert name in ema_state_dict
+        ema_state_dict[name] = model_without_ddp.ema_params1[i]
+    model_without_ddp.load_state_dict(ema_state_dict)
+
+    was_training = model_without_ddp.training
+    model_without_ddp.eval()
+
+    # fixed subset
+    imgs = []
+    labels = []
+    it = iter(data_loader_val)
+    while len(imgs) * data_loader_val.batch_size < args.restoration_eval_num:
+        try:
+            batch_imgs, batch_labels = next(it)
+        except StopIteration:
+            break
+        imgs.append(batch_imgs)
+        labels.append(batch_labels)
+    if len(imgs) == 0:
+        model_without_ddp.load_state_dict(model_state_dict)
+        if was_training:
+            model_without_ddp.train()
+        return
+
+    x = torch.cat(imgs, dim=0)[:args.restoration_eval_num].to(device, non_blocking=True).float().div_(255)
+    y = torch.cat(labels, dim=0)[:args.restoration_eval_num].to(device, non_blocking=True)
+    x = x * 2.0 - 1.0  # [-1,1]
+
+    # deterministic mosaic at fixed t_max
+    with torch.random.fork_rng():
+        torch.manual_seed(1234)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(1234)
+        z_mosaic, t_clamped = model_without_ddp.mosaic_engine.corrupt(x, model_without_ddp.sample_t, fixed_t=t_max)
+
+    # single-step prediction
+    x_pred_single = model_without_ddp.net(z_mosaic, t_clamped, y)
+
+    # partial trajectory integration from t_max -> 0
+    timesteps = torch.linspace(t_max, 0.0, args.num_sampling_steps + 1, device=device, dtype=x.dtype)
+    z_cur = z_mosaic
+    def _forward_flow(z, t_scalar):
+        t_view = t_scalar.view(-1, *([1] * (z.ndim - 1)))
+        x_pred = model_without_ddp.net(z, t_scalar, y)
+        v_pred = (x_pred - z) / (1.0 - t_view).clamp_min(model_without_ddp.t_eps)
+        return v_pred
+
+    for i in range(len(timesteps) - 1):
+        t = timesteps[i].expand(x.shape[0])
+        t_next = timesteps[i + 1].expand(x.shape[0])
+        if model_without_ddp.method == "heun":
+            v_pred_t = _forward_flow(z_cur, t)
+            z_euler = z_cur + (t_next - t).view(-1, *([1] * (z_cur.ndim - 1))) * v_pred_t
+            v_pred_t_next = _forward_flow(z_euler, t_next)
+            v_pred = 0.5 * (v_pred_t + v_pred_t_next)
         else:
-            raise NotImplementedError
-        metrics_dict = torch_fidelity.calculate_metrics(
-            input1=save_folder,
-            input2=None,
-            fid_statistics_file=fid_statistics_file,
-            cuda=True,
-            isc=True,
-            fid=True,
-            kid=False,
-            prc=False,
-            verbose=False,
-        )
-        fid = metrics_dict['frechet_inception_distance']
-        inception_score = metrics_dict['inception_score_mean']
-        postfix = "_cfg{}_res{}".format(model_without_ddp.cfg_scale, args.img_size)
-        log_writer.add_scalar('fid{}'.format(postfix), fid, epoch)
-        log_writer.add_scalar('is{}'.format(postfix), inception_score, epoch)
-        print("FID: {:.4f}, Inception Score: {:.4f}".format(fid, inception_score))
-        shutil.rmtree(save_folder)
+            v_pred = _forward_flow(z_cur, t)
+        z_cur = z_cur + (t_next - t).view(-1, *([1] * (z_cur.ndim - 1))) * v_pred
 
-    torch.distributed.barrier()
+    x_pred_multi = z_cur
+
+    def denorm(tensor):
+        return torch.clamp((tensor + 1) / 2, 0.0, 1.0)
+
+    x_gt = denorm(x)
+    x_mosaic = denorm(z_mosaic)
+    x_single = denorm(x_pred_single)
+    x_multi = denorm(x_pred_multi)
+
+    # metrics: PSNR/LPIPS for single and multi
+    def _psnr(a, b):
+        mse = (a - b).pow(2).flatten(1).mean(dim=1)
+        return (-10.0 * torch.log10(mse.clamp_min(1e-10))).mean().item()
+
+    psnr_single = _psnr(x_gt, x_single)
+    psnr_multi = _psnr(x_gt, x_multi)
+
+    lpips_loss_fn = _optional_lpips()
+    lpips_single = lpips_multi = None
+    if lpips_loss_fn is not None:
+        lpips_loss_fn = lpips_loss_fn.to(device)
+        lpips_single = lpips_loss_fn(x, x_pred_single).flatten().mean().item()
+        lpips_multi = lpips_loss_fn(x, x_pred_multi).flatten().mean().item()
+
+    # grids (limit to 32 panels)
+    panels = []
+    for i in range(x_gt.size(0)):
+        panel = torch.cat([x_gt[i], x_mosaic[i], x_single[i], x_multi[i]], dim=2)
+        panels.append(panel)
+        if len(panels) >= 32:
+            break
+    grid = vutils.make_grid(panels, nrow=int(len(panels) ** 0.5) or 1)
+
+    save_dir = os.path.join(args.output_dir, "images")
+    os.makedirs(save_dir, exist_ok=True)
+    save_path = os.path.join(save_dir, f"epoch_{epoch}_multistep.png")
+    vutils.save_image(grid, save_path)
+
+    # logging
+    if log_writer := getattr(run_multistep_restoration, "_log_writer", None):
+        log_writer.add_scalar('val/multistep_psnr', psnr_multi, epoch)
+        if lpips_multi is not None:
+            log_writer.add_scalar('val/multistep_lpips', lpips_multi, epoch)
+
+    if getattr(args, "use_wandb", False) and misc.is_main_process():
+        try:
+            import wandb
+            eval_step = (epoch + 1) * args.steps_per_epoch
+            log_payload = {
+                'val/multistep_psnr': psnr_multi,
+                'val/multistep_psnr_single': psnr_single,
+            }
+            if lpips_multi is not None:
+                log_payload['val/multistep_lpips'] = lpips_multi
+                log_payload['val/multistep_lpips_single'] = lpips_single
+            wandb.log(log_payload, step=eval_step)
+            wandb.log({"val/multistep_grid": wandb.Image(save_path, caption=f"epoch {epoch}, t_max={t_max}")}, step=eval_step)
+        except Exception as e:
+            print(f"W&B multistep log warning: {e}")
+
+    # restore state
+    model_without_ddp.load_state_dict(model_state_dict)
+    if was_training:
+        model_without_ddp.train()
 
 
 @torch.no_grad()
@@ -417,13 +530,14 @@ def run_reconstructions(model_without_ddp, data_loader_val, device, epoch, args)
     if getattr(args, "use_wandb", False) and misc.is_main_process():
         try:
             import wandb
+            eval_step = (epoch + 1) * args.steps_per_epoch
             stage_info = None
             if hasattr(model_without_ddp, "get_curriculum_state"):
                 stage_info = model_without_ddp.get_curriculum_state()
             caption = f"epoch {epoch}"
             if stage_info:
                 caption += f", stage {stage_info.get('stage', '')}"
-            wandb.log({"reconstructions": wandb.Image(save_path, caption=caption)}, step=epoch)
+            wandb.log({"reconstructions": wandb.Image(save_path, caption=caption)}, step=eval_step)
         except Exception as e:
             print(f"W&B image log warning: {e}")
 
