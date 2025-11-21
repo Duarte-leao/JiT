@@ -1,3 +1,6 @@
 imagenette2/
 jit/
 .vscode/
+__pycache__/
+*.pyc
+output_dinov2_val/

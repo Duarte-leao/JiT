@@ -90,6 +90,12 @@ class Denoiser(nn.Module):
         args
     ):
         super().__init__()
+        # enforce patch-size compatibility for DINOv2 backbones
+        if args.model in ['DINOv2-JiT-S/14', 'DINOv2-JiT-B/14'] and args.img_size % 14 != 0:
+            raise ValueError(
+                f"Model {args.model} requires img_size to be a multiple of 14 (e.g., 224, 280). "
+                f"Got img_size={args.img_size}."
+            )
         self.net = JiT_models[args.model](
             input_size=args.img_size,
             in_channels=3,

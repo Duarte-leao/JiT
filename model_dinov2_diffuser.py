@@ -63,7 +63,11 @@ class DINOv2Diffuser(nn.Module):
 
         self.patch_size = self._resolve_patch_size()
         assert self.patch_size[0] == self.patch_size[1], "Non-square patches are not supported."
-        assert self.input_size % self.patch_size[0] == 0, "Input size must be a multiple of patch size."
+        if self.input_size % self.patch_size[0] != 0:
+            raise ValueError(
+                f"DINOv2 backbone expects img_size to be a multiple of patch size={self.patch_size[0]}. "
+                f"Got img_size={self.input_size}. Please set --img_size to a multiple of {self.patch_size[0]} (e.g., 224, 280)."
+            )
 
         # cache structural properties
         self.embed_dim = self._resolve_embed_dim()
