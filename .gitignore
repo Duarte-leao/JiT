@@ -4,3 +4,5 @@ jit/
 __pycache__/
 *.pyc
 output_dinov2_val/
+wandb/
+plan.md

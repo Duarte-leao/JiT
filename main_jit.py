@@ -109,6 +109,14 @@ def get_args_parser():
     parser.add_argument('--dist_url', default='env://',
                         help='URL used to set up distributed training')
 
+    # logging / visualization
+    parser.add_argument('--wandb', action='store_true', help='Enable Weights & Biases logging')
+    parser.add_argument('--wandb_project', default='dinov2-jit-validation', type=str, help='W&B project name')
+    parser.add_argument('--wandb_entity', default=None, type=str, help='W&B entity (optional)')
+    parser.add_argument('--wandb_run_name', default=None, type=str, help='W&B run name (optional)')
+    parser.add_argument('--recons_freq', default=0, type=int, help='Epoch frequency for reconstruction logging (0 to disable)')
+    parser.add_argument('--num_recons', default=16, type=int, help='Number of validation examples for recon grids')
+
     return parser
 
 
@@ -159,6 +167,21 @@ def main(args):
         drop_last=True
     )
 
+    # Validation loader for reconstructions (rank 0 only will use it)
+    transform_val = transforms.Compose([
+        transforms.Lambda(lambda img: center_crop_arr(img, args.img_size)),
+        transforms.PILToTensor()
+    ])
+    dataset_val = datasets.ImageFolder(os.path.join(args.data_path, 'val'), transform=transform_val)
+    sampler_val = None
+    data_loader_val = torch.utils.data.DataLoader(
+        dataset_val, sampler=sampler_val,
+        batch_size=max(1, args.num_recons),
+        num_workers=min(4, args.num_workers),
+        pin_memory=args.pin_mem,
+        drop_last=False
+    )
+
     torch._dynamo.config.cache_size_limit = 128
     torch._dynamo.config.optimize_ddp = False
 
@@ -186,6 +209,22 @@ def main(args):
     param_groups = misc.add_weight_decay(model_without_ddp, args.weight_decay)
     optimizer = torch.optim.AdamW(param_groups, lr=args.lr, betas=(0.9, 0.95))
     print(optimizer)
+
+    # Optional Weights & Biases init
+    args.use_wandb = False
+    if args.wandb and misc.is_main_process():
+        try:
+            import wandb
+            wandb.init(
+                project=args.wandb_project or "dinov2-jit-validation",
+                entity=args.wandb_entity or None,
+                name=args.wandb_run_name or None,
+                config=vars(args)
+            )
+            args.use_wandb = True
+            print("W&B logging enabled.")
+        except Exception as e:
+            print(f"Warning: W&B logging requested but not initialized ({e}). Continuing without W&B.")
 
     # Resume from checkpoint if provided
     checkpoint_path = os.path.join(args.resume, "checkpoint-last.pth") if args.resume else None
@@ -226,6 +265,11 @@ def main(args):
             data_loader_train.sampler.set_epoch(epoch)
 
         train_one_epoch(model, model_without_ddp, data_loader_train, optimizer, device, epoch, log_writer=log_writer, args=args)
+
+        # Reconstructions (main process only)
+        if args.recons_freq > 0 and epoch % args.recons_freq == 0 and misc.is_main_process():
+            from engine_jit import run_reconstructions  # local import to avoid circular deps
+            run_reconstructions(model_without_ddp, data_loader_val, device, epoch, args)
 
         # Save checkpoint periodically
         if epoch % args.save_last_freq == 0 or epoch + 1 == args.epochs:

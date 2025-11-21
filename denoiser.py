@@ -139,6 +139,17 @@ class Denoiser(nn.Module):
         # initialize stage 0
         self.set_epoch(args.start_epoch)
 
+    def get_stage_info(self):
+        """Expose current curriculum stage and active parameters."""
+        if self.current_stage_idx < 0 or self.current_stage_idx >= len(self.stage_schedule):
+            return None
+        _, stage_cfg, _ = self.stage_schedule[self.current_stage_idx]
+        return {
+            "stage_id": self.current_stage_idx + 1,
+            "p_max": stage_cfg.get("p_max", 0.0),
+            "t_max": stage_cfg.get("t_max", 0.0),
+        }
+
     def drop_labels(self, labels):
         drop = torch.rand(labels.shape[0], device=labels.device) < self.label_drop_prob
         out = torch.where(drop, torch.full_like(labels, self.num_classes), labels)

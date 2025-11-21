@@ -11,12 +11,15 @@ import util.misc as misc
 import util.lr_sched as lr_sched
 import torch_fidelity
 import copy
+import torchvision.utils as vutils
+from typing import Optional
 
 
 def train_one_epoch(model, model_without_ddp, data_loader, optimizer, device, epoch, log_writer=None, args=None):
     model.train(True)
     metric_logger = misc.MetricLogger(delimiter="  ")
     metric_logger.add_meter('lr', misc.SmoothedValue(window_size=1, fmt='{value:.6f}'))
+    metric_logger.add_meter('stage', misc.SmoothedValue(window_size=1, fmt='{value:d}'))
     header = 'Epoch: [{}]'.format(epoch)
     print_freq = 20
 
@@ -28,6 +31,15 @@ def train_one_epoch(model, model_without_ddp, data_loader, optimizer, device, ep
 
     if log_writer is not None:
         print('log_dir: {}'.format(log_writer.log_dir))
+
+    # static stage info for this epoch (used for logging/printing)
+    stage_info_epoch = None
+    if hasattr(model_without_ddp, "get_stage_info"):
+        stage_info_epoch = model_without_ddp.get_stage_info()
+        if stage_info_epoch:
+            print(f"Stage info: stage {stage_info_epoch.get('stage_id', 0)}, "
+                  f"p_max={stage_info_epoch.get('p_max', 0.0):.2f}, "
+                  f"t_max={stage_info_epoch.get('t_max', 0.0):.2f}")
 
     for data_iter_step, (x, labels) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
         # per iteration (instead of per epoch) lr scheduler
@@ -57,6 +69,8 @@ def train_one_epoch(model, model_without_ddp, data_loader, optimizer, device, ep
         metric_logger.update(loss=loss_value)
         lr = optimizer.param_groups[0]["lr"]
         metric_logger.update(lr=lr)
+        if stage_info_epoch:
+            metric_logger.update(stage=int(stage_info_epoch.get("stage_id", 0)))
 
         loss_value_reduce = misc.all_reduce_mean(loss_value)
 
@@ -66,6 +80,28 @@ def train_one_epoch(model, model_without_ddp, data_loader, optimizer, device, ep
             if data_iter_step % args.log_freq == 0:
                 log_writer.add_scalar('train_loss', loss_value_reduce, epoch_1000x)
                 log_writer.add_scalar('lr', lr, epoch_1000x)
+                # curriculum metrics
+                if stage_info_epoch is not None:
+                    log_writer.add_scalar('curriculum/stage', stage_info_epoch.get("stage_id", 0), epoch_1000x)
+                    if "p_max" in stage_info_epoch:
+                        log_writer.add_scalar('curriculum/p_max', stage_info_epoch["p_max"], epoch_1000x)
+                    if "t_max" in stage_info_epoch:
+                        log_writer.add_scalar('curriculum/t_max', stage_info_epoch["t_max"], epoch_1000x)
+                # wandb logging (main process only)
+                if getattr(args, "use_wandb", False) and misc.is_main_process():
+                    try:
+                        import wandb
+                        log_payload = {'train/loss': loss_value_reduce, 'train/lr': lr, 'train/epoch': epoch}
+                        if stage_info_epoch is not None:
+                            log_payload.update({
+                                'curriculum/stage': stage_info_epoch.get("stage_id", 0),
+                                'curriculum/p_max': stage_info_epoch.get("p_max", 0.0),
+                                'curriculum/t_max': stage_info_epoch.get("t_max", 0.0),
+                            })
+                        wandb.log(log_payload, step=epoch_1000x)
+                    except Exception as e:
+                        # keep training even if wandb log fails
+                        print(f"W&B log warning: {e}")
 
 
 def evaluate(model_without_ddp, args, epoch, batch_size=64, log_writer=None):
@@ -163,3 +199,87 @@ def evaluate(model_without_ddp, args, epoch, batch_size=64, log_writer=None):
         shutil.rmtree(save_folder)
 
     torch.distributed.barrier()
+
+
+@torch.no_grad()
+def run_reconstructions(model_without_ddp, data_loader_val, device, epoch, args):
+    """
+    Generate reconstruction grids from validation images for qualitative tracking.
+    Uses EMA weights, ground-truth labels, and cfg_scale=1.0 (no CFG).
+    """
+    if data_loader_val is None or args.num_recons <= 0:
+        return
+
+    # swap to EMA weights (first EMA) like evaluate
+    model_state_dict = copy.deepcopy(model_without_ddp.state_dict())
+    ema_state_dict = copy.deepcopy(model_without_ddp.state_dict())
+    for i, (name, _value) in enumerate(model_without_ddp.named_parameters()):
+        assert name in ema_state_dict
+        ema_state_dict[name] = model_without_ddp.ema_params1[i]
+    model_without_ddp.load_state_dict(ema_state_dict)
+
+    was_training = model_without_ddp.training
+    model_without_ddp.eval()
+
+    imgs = []
+    labels = []
+    it = iter(data_loader_val)
+    while len(imgs) < args.num_recons:
+        try:
+            batch_imgs, batch_labels = next(it)
+        except StopIteration:
+            break
+        imgs.append(batch_imgs)
+        labels.append(batch_labels)
+    if len(imgs) == 0:
+        # restore and exit
+        model_without_ddp.load_state_dict(model_state_dict)
+        if was_training:
+            model_without_ddp.train()
+        return
+    x = torch.cat(imgs, dim=0)[:args.num_recons].to(device, non_blocking=True).float().div_(255)
+    y = torch.cat(labels, dim=0)[:args.num_recons].to(device, non_blocking=True)
+    x = x * 2.0 - 1.0  # [-1,1]
+
+    # Mosaic corruption with current stage
+    z_mosaic, t = model_without_ddp.mosaic_engine.corrupt(x, model_without_ddp.sample_t)
+
+    # Forward pass (no label drop, cfg=1)
+    x_pred = model_without_ddp.net(z_mosaic, t, y)
+
+    def denorm(tensor):
+        return torch.clamp((tensor + 1) / 2, 0.0, 1.0)
+
+    x_clean = denorm(x).cpu()
+    x_input = denorm(z_mosaic).cpu()
+    x_out = denorm(x_pred).cpu()
+
+    panels = []
+    for i in range(x_clean.size(0)):
+        panel = torch.cat([x_clean[i], x_input[i], x_out[i]], dim=2)
+        panels.append(panel)
+    grid = vutils.make_grid(panels, nrow=int(len(panels) ** 0.5) or 1)
+
+    save_dir = os.path.join(args.output_dir, "images", f"epoch_{epoch}")
+    os.makedirs(save_dir, exist_ok=True)
+    save_path = os.path.join(save_dir, "recon.png")
+    vutils.save_image(grid, save_path)
+
+    # wandb logging
+    if getattr(args, "use_wandb", False) and misc.is_main_process():
+        try:
+            import wandb
+            stage_info = None
+            if hasattr(model_without_ddp, "get_stage_info"):
+                stage_info = model_without_ddp.get_stage_info()
+            caption = f"epoch {epoch}"
+            if stage_info:
+                caption += f", stage {stage_info.get('stage_id', '')}"
+            wandb.log({"reconstructions": wandb.Image(save_path, caption=caption)}, step=epoch)
+        except Exception as e:
+            print(f"W&B image log warning: {e}")
+
+    # restore state
+    model_without_ddp.load_state_dict(model_state_dict)
+    if was_training:
+        model_without_ddp.train()
