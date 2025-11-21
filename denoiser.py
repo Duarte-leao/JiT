@@ -10,6 +10,79 @@ JiT_models.update({
 })
 
 
+class MosaicNoisingEngine:
+    """
+    Builds mosaic-corrupted inputs by mixing clean and noisy patches according to a curriculum.
+    """
+    def __init__(self, img_size: int, patch_size: int, device: torch.device):
+        self.img_size = img_size
+        self.patch_size = patch_size
+        self.device = device
+
+        assert self.img_size % self.patch_size == 0, "img_size must be divisible by patch_size"
+        self.grid_h = self.img_size // self.patch_size
+        self.grid_w = self.img_size // self.patch_size
+        self.num_patches = self.grid_h * self.grid_w
+
+        # stage parameters (updated via update_stage)
+        self.p_min = 0.1
+        self.p_max = 0.3
+        self.t_max = 1.0
+
+    def update_stage(self, stage_cfg: dict):
+        """Update the corruption intensity for the active stage."""
+        self.p_min = stage_cfg.get("p_min", self.p_min)
+        self.p_max = stage_cfg.get("p_max", self.p_max)
+        self.t_max = stage_cfg.get("t_max", self.t_max)
+
+    def _sample_mask(self, batch_size: int) -> torch.Tensor:
+        """
+        Sample a per-image grid mask with exactly K noisy patches.
+        Returns a mask of shape (B, 1, grid_h, grid_w).
+        """
+        # one p per batch for stability (can extend to per-image if desired)
+        p = torch.empty(1, device=self.device).uniform_(self.p_min, self.p_max).item()
+        k = int(round(p * self.num_patches))
+        k = max(0, min(k, self.num_patches))
+
+        mask_grid = torch.zeros(batch_size, self.num_patches, device=self.device)
+        if k > 0:
+            idx = torch.rand(batch_size, self.num_patches, device=self.device).argsort(dim=1)[:, :k]
+            # scatter 1s at selected indices
+            flat_indices = idx + torch.arange(batch_size, device=self.device).unsqueeze(1) * self.num_patches
+            mask_grid = mask_grid.view(-1)
+            mask_grid[flat_indices.reshape(-1)] = 1.0
+            mask_grid = mask_grid.view(batch_size, self.num_patches)
+        mask_grid = mask_grid.view(batch_size, 1, self.grid_h, self.grid_w)
+        return mask_grid
+
+    def corrupt(self, x_start: torch.Tensor, sample_t_fn) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Apply mosaic corruption to x_start.
+        Returns:
+            z_out: mosaic-composited input (B, C, H, W)
+            t:     clamped timesteps (B,)
+        """
+        bsz = x_start.shape[0]
+
+        # timestep sampling and clamping per stage
+        t = sample_t_fn(bsz, device=x_start.device)
+        t = t.clamp(max=self.t_max)
+        t_view = t.view(bsz, *([1] * (x_start.ndim - 1)))
+
+        # full noisy candidate
+        e = torch.randn_like(x_start)
+        z_noisy = t_view * x_start + (1 - t_view) * e
+
+        # patch mask generation on grid and upsample to pixel space
+        mask_grid = self._sample_mask(bsz)  # (B,1,grid_h,grid_w)
+        mask_pixel = mask_grid.repeat_interleave(self.patch_size, dim=2).repeat_interleave(self.patch_size, dim=3)
+
+        # compose mosaic
+        z_out = x_start * (1 - mask_pixel) + z_noisy * mask_pixel
+        return z_out, t
+
+
 class Denoiser(nn.Module):
     def __init__(
         self,
@@ -44,10 +117,44 @@ class Denoiser(nn.Module):
         self.cfg_scale = args.cfg
         self.cfg_interval = (args.interval_min, args.interval_max)
 
+        # mosaic noising engine (uses patch geometry from the backbone)
+        patch_size = self.net.patch_size if isinstance(self.net.patch_size, int) else self.net.patch_size[0]
+        self.mosaic_engine = MosaicNoisingEngine(img_size=self.img_size, patch_size=patch_size, device=torch.device(args.device))
+
+        # curriculum stages: (end_epoch, stage_cfg, backbone_action)
+        # Defaults target ImageNette validation; adjust epochs as needed.
+        self.stage_schedule = [
+            (args.epochs // 3, {"p_min": 0.10, "p_max": 0.30, "t_max": 0.3}, "freeze"),
+            (2 * args.epochs // 3, {"p_min": 0.40, "p_max": 0.70, "t_max": 0.6}, "unfreeze_last"),
+            (args.epochs + 1, {"p_min": 0.80, "p_max": 1.00, "t_max": 1.0}, "unfreeze_all"),
+        ]
+        self.current_stage_idx = -1
+        # initialize stage 0
+        self.set_epoch(args.start_epoch)
+
     def drop_labels(self, labels):
         drop = torch.rand(labels.shape[0], device=labels.device) < self.label_drop_prob
         out = torch.where(drop, torch.full_like(labels, self.num_classes), labels)
         return out
+
+    def set_epoch(self, epoch: int):
+        """Update curriculum stage and backbone freezing according to current epoch."""
+        # find first schedule entry whose end_epoch is greater than epoch
+        for idx, (end_epoch, stage_cfg, action) in enumerate(self.stage_schedule):
+            if epoch < end_epoch:
+                # only react on stage change
+                if idx != self.current_stage_idx:
+                    self.current_stage_idx = idx
+                    self.mosaic_engine.update_stage(stage_cfg)
+                    if hasattr(self.net, "freeze_backbone"):
+                        if action == "freeze":
+                            self.net.freeze_backbone()
+                        elif action == "unfreeze_last":
+                            # default to last 4 blocks; adjust easily if needed
+                            self.net.unfreeze_last_blocks(4)
+                        elif action == "unfreeze_all":
+                            self.net.unfreeze_all()
+                break
 
     def sample_t(self, n: int, device=None):
         z = torch.randn(n, device=device) * self.P_std + self.P_mean
@@ -56,14 +163,13 @@ class Denoiser(nn.Module):
     def forward(self, x, labels):
         labels_dropped = self.drop_labels(labels) if self.training else labels
 
-        t = self.sample_t(x.size(0), device=x.device).view(-1, *([1] * (x.ndim - 1)))
-        e = torch.randn_like(x) * self.noise_scale
+        z, t = self.mosaic_engine.corrupt(x, self.sample_t)
+        t_view = t.view(-1, *([1] * (x.ndim - 1)))
 
-        z = t * x + (1 - t) * e
-        v = (x - z) / (1 - t).clamp_min(self.t_eps)
+        v = (x - z) / (1 - t_view).clamp_min(self.t_eps)
 
-        x_pred = self.net(z, t.flatten(), labels_dropped)
-        v_pred = (x_pred - z) / (1 - t).clamp_min(self.t_eps)
+        x_pred = self.net(z, t, labels_dropped)
+        v_pred = (x_pred - z) / (1 - t_view).clamp_min(self.t_eps)
 
         # l2 loss
         loss = (v - v_pred) ** 2

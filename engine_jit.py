@@ -20,6 +20,10 @@ def train_one_epoch(model, model_without_ddp, data_loader, optimizer, device, ep
     header = 'Epoch: [{}]'.format(epoch)
     print_freq = 20
 
+    # synchronize curriculum stage with epoch
+    if hasattr(model_without_ddp, "set_epoch"):
+        model_without_ddp.set_epoch(epoch)
+
     optimizer.zero_grad()
 
     if log_writer is not None:
