@@ -85,6 +85,7 @@ class DINOv2Diffuser(nn.Module):
         # decoder head
         self.decoder_norm = RMSNorm(self.embed_dim)
         self.decoder_linear = nn.Linear(self.embed_dim, self.patch_size[0] * self.patch_size[1] * 3)
+        self.mask_head = nn.Linear(self.embed_dim, 1)
 
         # imagenet normalization buffers
         mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
@@ -128,7 +129,7 @@ class DINOv2Diffuser(nn.Module):
         return grid
 
     def _ensure_trainable_cond_and_decoder(self):
-        for module in [self.t_embedder, self.y_embedder, self.cond_pos_embed, self.decoder_norm, self.decoder_linear]:
+        for module in [self.t_embedder, self.y_embedder, self.cond_pos_embed, self.decoder_norm, self.decoder_linear, self.mask_head]:
             for p in module.parameters() if hasattr(module, "parameters") else [module]:
                 p.requires_grad = True
 
@@ -163,7 +164,7 @@ class DINOv2Diffuser(nn.Module):
         patch_pos = patch_pos.permute(0, 2, 3, 1).reshape(1, h * w, self.embed_dim)
         return prefix, patch_pos
 
-    def forward(self, x: torch.Tensor, t: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, t: torch.Tensor, y: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         # map [-1, 1] -> [0, 1], clamp, then ImageNet normalize
         x = (x + 1) * 0.5
         x = x.clamp(0.0, 1.0)
@@ -205,11 +206,12 @@ class DINOv2Diffuser(nn.Module):
         prefix_len = 2 + self.num_prefix_tokens
         patch_tokens = tokens[:, prefix_len:, :]
         patch_tokens = self.decoder_norm(patch_tokens)
-        patch_tokens = self.decoder_linear(patch_tokens)
+        img_tokens = self.decoder_linear(patch_tokens)
+        mask_logits = self.mask_head(patch_tokens)  # (B, N, 1)
 
         # reshape back to image space
-        output = self.unpatchify(patch_tokens, H_p, W_p)
-        return output
+        output = self.unpatchify(img_tokens, H_p, W_p)
+        return output, mask_logits
 
     def unpatchify(self, x: torch.Tensor, h: int, w: int) -> torch.Tensor:
         """

@@ -16,12 +16,39 @@ from typing import Optional
 import math as pymath
 
 
+def _upsample_patch_mask(mask_patch_logits: Optional[torch.Tensor], patch_size: int, H: int, W: int) -> Optional[torch.Tensor]:
+    """
+    Convert patch-level mask logits (B, N, 1) to pixel space (B, 1, H, W).
+    """
+    if mask_patch_logits is None:
+        return None
+    B = mask_patch_logits.shape[0]
+    H_p, W_p = H // patch_size, W // patch_size
+    mask_grid = mask_patch_logits.permute(0, 2, 1).reshape(B, 1, H_p, W_p)
+    mask_pixel = mask_grid.repeat_interleave(patch_size, dim=2).repeat_interleave(patch_size, dim=3)
+    return mask_pixel
+
+
+def _apply_gating(x_pred: torch.Tensor, mask_patch_logits: Optional[torch.Tensor], z_input: torch.Tensor, patch_size: int) -> torch.Tensor:
+    """
+    Apply self-gating using patch-level mask logits; fall back to raw prediction if mask is unavailable.
+    """
+    if mask_patch_logits is None:
+        return x_pred
+    mask_pixel = _upsample_patch_mask(mask_patch_logits, patch_size, x_pred.shape[2], x_pred.shape[3])
+    if mask_pixel is None:
+        return x_pred
+    gate = torch.sigmoid(mask_pixel.to(dtype=x_pred.dtype))
+    return gate * x_pred + (1 - gate) * z_input
+
+
 def train_one_epoch(model, model_without_ddp, data_loader, optimizer, device, epoch, log_writer=None, args=None):
     model.train(True)
     metric_logger = misc.MetricLogger(delimiter="  ")
     metric_logger.add_meter('lr', misc.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     metric_logger.add_meter('stage', misc.SmoothedValue(window_size=1, fmt='{value:d}'))
     metric_logger.add_meter('x_mse', misc.SmoothedValue(window_size=1, fmt='{value:.6f}'))
+    metric_logger.add_meter('mask_loss', misc.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     header = 'Epoch: [{}]'.format(epoch)
     print_freq = 20
 
@@ -57,13 +84,20 @@ def train_one_epoch(model, model_without_ddp, data_loader, optimizer, device, ep
 
         with torch.amp.autocast('cuda', dtype=torch.bfloat16):
             loss_out = model(x, labels)
+            loss = x_mse = mask_loss = None
             if isinstance(loss_out, tuple):
-                loss, x_mse = loss_out
+                if len(loss_out) == 3:
+                    loss, x_mse, mask_loss = loss_out
+                elif len(loss_out) == 2:
+                    loss, x_mse = loss_out
+                else:
+                    loss = loss_out[0]
             else:
-                loss, x_mse = loss_out, None
+                loss = loss_out
 
         loss_value = loss.item()
         x_mse_value = x_mse.item() if x_mse is not None else None
+        mask_loss_value = mask_loss.item() if mask_loss is not None else None
         if not math.isfinite(loss_value):
             print("Loss is {}, stopping training".format(loss_value))
             sys.exit(1)
@@ -83,9 +117,12 @@ def train_one_epoch(model, model_without_ddp, data_loader, optimizer, device, ep
             metric_logger.update(stage=int(curriculum_state.get("stage", 0)))
         if x_mse_value is not None:
             metric_logger.update(x_mse=x_mse_value)
+        if mask_loss_value is not None:
+            metric_logger.update(mask_loss=mask_loss_value)
 
         loss_value_reduce = misc.all_reduce_mean(loss_value)
         x_mse_reduce = misc.all_reduce_mean(x_mse_value) if x_mse_value is not None else None
+        mask_loss_reduce = misc.all_reduce_mean(mask_loss_value) if mask_loss_value is not None else None
 
         if log_writer is not None:
             # Use a monotonically increasing step across epochs/iters
@@ -95,6 +132,8 @@ def train_one_epoch(model, model_without_ddp, data_loader, optimizer, device, ep
                 log_writer.add_scalar('lr', lr, global_step)
                 if x_mse_reduce is not None:
                     log_writer.add_scalar('train/x_mse', x_mse_reduce, global_step)
+                if mask_loss_reduce is not None:
+                    log_writer.add_scalar('train/mask_loss', mask_loss_reduce, global_step)
                 # curriculum metrics
                 if curriculum_state is not None:
                     log_writer.add_scalar('curriculum/stage', curriculum_state.get("stage", 0), global_step)
@@ -111,6 +150,8 @@ def train_one_epoch(model, model_without_ddp, data_loader, optimizer, device, ep
                         log_payload = {'train/loss': loss_value_reduce, 'train/lr': lr, 'train/epoch': epoch}
                         if x_mse_reduce is not None:
                             log_payload['train/x_mse'] = x_mse_reduce
+                        if mask_loss_reduce is not None:
+                            log_payload['train/mask_loss'] = mask_loss_reduce
                         if curriculum_state is not None:
                             log_payload.update({
                                 'curriculum/stage': curriculum_state.get("stage", 0),
@@ -255,17 +296,23 @@ def run_restoration_eval(model_without_ddp, data_loader_val, device, epoch, args
         torch.manual_seed(1234)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(1234)
-        z_mosaic, t = model_without_ddp.mosaic_engine.corrupt(x, model_without_ddp.sample_t)
+        z_mosaic, t, _ = model_without_ddp.mosaic_engine.corrupt(x, model_without_ddp.sample_t)
 
     # forward (no label drop, cfg=1)
-    x_pred = model_without_ddp.net(z_mosaic, t, y)
+    net_out = model_without_ddp.net(z_mosaic, t, y)
+    if isinstance(net_out, tuple):
+        x_pred, mask_logits_patch = net_out
+    else:
+        x_pred, mask_logits_patch = net_out, None
+    patch_size = model_without_ddp.mosaic_engine.patch_size
+    x_pred_gated = _apply_gating(x_pred, mask_logits_patch, z_mosaic, patch_size)
 
     def denorm(tensor):
         return torch.clamp((tensor + 1) / 2, 0.0, 1.0)
 
     # metrics in image space [0,1]
     x_gt = denorm(x)
-    x_pd = denorm(x_pred)
+    x_pd = denorm(x_pred_gated)
     mse = (x_gt - x_pd).pow(2).flatten(1).mean(dim=1)
     psnr = -10.0 * torch.log10(mse.clamp_min(1e-10))
     psnr_mean = psnr.mean().item()
@@ -275,7 +322,7 @@ def run_restoration_eval(model_without_ddp, data_loader_val, device, epoch, args
     if lpips_loss_fn is not None:
         lpips_loss_fn = lpips_loss_fn.to(device)
         # LPIPS expects [-1,1]
-        lpips_vals = lpips_loss_fn(x, x_pred).flatten()
+        lpips_vals = lpips_loss_fn(x, x_pred_gated).flatten()
         lpips_val = lpips_vals.mean().item()
 
     # grids
@@ -374,17 +421,24 @@ def run_multistep_restoration(model_without_ddp, data_loader_val, device, epoch,
         torch.manual_seed(1234)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(1234)
-        z_mosaic, t_clamped = model_without_ddp.mosaic_engine.corrupt(x, model_without_ddp.sample_t, fixed_t=start_t)
+        z_mosaic, t_clamped, _ = model_without_ddp.mosaic_engine.corrupt(x, model_without_ddp.sample_t, fixed_t=start_t)
 
     # single-step prediction
-    x_pred_single = model_without_ddp.net(z_mosaic, t_clamped, y)
+    net_out_single = model_without_ddp.net(z_mosaic, t_clamped, y)
+    if isinstance(net_out_single, tuple):
+        x_pred_single, mask_logits_patch = net_out_single
+    else:
+        x_pred_single, mask_logits_patch = net_out_single, None
+    patch_size = model_without_ddp.mosaic_engine.patch_size
+    x_final_single = _apply_gating(x_pred_single, mask_logits_patch, z_mosaic, patch_size)
 
     # partial trajectory integration from t_max -> 0
     timesteps = torch.linspace(start_t, 1.0, args.num_sampling_steps + 1, device=device, dtype=x.dtype)
     z_cur = z_mosaic
     def _forward_flow(z, t_scalar):
         t_view = t_scalar.view(-1, *([1] * (z.ndim - 1)))
-        x_pred = model_without_ddp.net(z, t_scalar, y)
+        net_out = model_without_ddp.net(z, t_scalar, y)
+        x_pred = net_out[0] if isinstance(net_out, tuple) else net_out
         v_pred = (x_pred - z) / (1.0 - t_view).clamp_min(model_without_ddp.t_eps)
         return v_pred
 
@@ -407,8 +461,8 @@ def run_multistep_restoration(model_without_ddp, data_loader_val, device, epoch,
 
     x_gt = denorm(x)
     x_mosaic = denorm(z_mosaic)
-    x_single = denorm(x_pred_single)
-    x_multi = denorm(x_pred_multi)
+    x_single = denorm(x_final_single)
+    x_multi = denorm(_apply_gating(x_pred_multi, mask_logits_patch, z_mosaic, patch_size))
 
     # metrics: PSNR/LPIPS for single and multi
     def _psnr(a, b):
@@ -422,8 +476,8 @@ def run_multistep_restoration(model_without_ddp, data_loader_val, device, epoch,
     lpips_single = lpips_multi = None
     if lpips_loss_fn is not None:
         lpips_loss_fn = lpips_loss_fn.to(device)
-        lpips_single = lpips_loss_fn(x, x_pred_single).flatten().mean().item()
-        lpips_multi = lpips_loss_fn(x, x_pred_multi).flatten().mean().item()
+        lpips_single = lpips_loss_fn(x, x_final_single).flatten().mean().item()
+        lpips_multi = lpips_loss_fn(x, _apply_gating(x_pred_multi, mask_logits_patch, z_mosaic, patch_size)).flatten().mean().item()
 
     # grids (limit to 32 panels)
     panels = []
@@ -510,10 +564,16 @@ def run_reconstructions(model_without_ddp, data_loader_val, device, epoch, args)
     x = x * 2.0 - 1.0  # [-1,1]
 
     # Mosaic corruption with current stage
-    z_mosaic, t = model_without_ddp.mosaic_engine.corrupt(x, model_without_ddp.sample_t)
+    z_mosaic, t, _ = model_without_ddp.mosaic_engine.corrupt(x, model_without_ddp.sample_t)
 
     # Forward pass (no label drop, cfg=1)
-    x_pred = model_without_ddp.net(z_mosaic, t, y)
+    net_out = model_without_ddp.net(z_mosaic, t, y)
+    if isinstance(net_out, tuple):
+        x_pred, mask_logits_patch = net_out
+    else:
+        x_pred, mask_logits_patch = net_out, None
+    patch_size = model_without_ddp.mosaic_engine.patch_size
+    x_pred = _apply_gating(x_pred, mask_logits_patch, z_mosaic, patch_size)
 
     def denorm(tensor):
         return torch.clamp((tensor + 1) / 2, 0.0, 1.0)
@@ -596,11 +656,17 @@ def run_clean_reconstruction(model_without_ddp, data_loader_val, device, epoch, 
     y = torch.cat(labels, dim=0)[:args.num_recons].to(device, non_blocking=True)
     x = x * 2.0 - 1.0  # [-1,1]
 
-    # zero timestep
-    t = torch.zeros(x.size(0), device=device, dtype=x.dtype)
+    # pure-signal timestep (t=1.0 corresponds to clean data in the signal-strength convention)
+    t = torch.ones(x.size(0), device=device, dtype=x.dtype)
 
     # forward pass (no label drop, cfg=1)
-    x_rec = model_without_ddp.net(x, t, y)
+    net_out = model_without_ddp.net(x, t, y)
+    if isinstance(net_out, tuple):
+        x_rec, mask_logits_patch = net_out
+    else:
+        x_rec, mask_logits_patch = net_out, None
+    patch_size = model_without_ddp.mosaic_engine.patch_size
+    x_rec = _apply_gating(x_rec, mask_logits_patch, x, patch_size)
 
     def denorm(tensor):
         return torch.clamp((tensor + 1) / 2, 0.0, 1.0)

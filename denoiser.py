@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from model_jit import JiT_models
-from model_dinov2_diffuser import DINOv2_JiT_S_14, DINOv2_JiT_B_14
+from model_dinov2_diffuser import DINOv2_JiT_S_14, DINOv2_JiT_B_14, DINOv2Diffuser
 
 # extend registry with DINOv2 variants
 JiT_models.update({
@@ -56,12 +56,13 @@ class MosaicNoisingEngine:
         mask_grid = mask_flat.view(batch_size, 1, self.grid_h, self.grid_w)
         return mask_grid
 
-    def corrupt(self, x_start: torch.Tensor, sample_t_fn, fixed_t: float = None) -> tuple[torch.Tensor, torch.Tensor]:
+    def corrupt(self, x_start: torch.Tensor, sample_t_fn, fixed_t: float = None) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Apply mosaic corruption to x_start.
         Returns:
             z_out: mosaic-composited input (B, C, H, W)
             t:     clamped timesteps (B,)
+            mask_patch: patch-level binary mask (B, N, 1), 1 = noisy, 0 = clean
         """
         bsz = x_start.shape[0]
         device = x_start.device
@@ -82,10 +83,11 @@ class MosaicNoisingEngine:
         # patch mask generation on grid and upsample to pixel space
         mask_grid = self._sample_mask(bsz, device=device)  # (B,1,grid_h,grid_w)
         mask_pixel = mask_grid.repeat_interleave(self.patch_size, dim=2).repeat_interleave(self.patch_size, dim=3)
+        mask_patch = mask_grid.flatten(2).transpose(1, 2)  # (B, N, 1)
 
         # compose mosaic
         z_out = x_start * (1 - mask_pixel) + z_noisy * mask_pixel
-        return z_out, t
+        return z_out, t, mask_patch
 
 
 class CurriculumController:
@@ -103,8 +105,8 @@ class CurriculumController:
         # Stage definitions using fractional start points
         self.stages = [
             {"start_frac": 0.0, "p_min": 0.10, "p_max": 0.30, "t_max": 0.3, "backbone_mode": "freeze"},
-            {"start_frac": 0.3, "p_min": 0.40, "p_max": 0.70, "t_max": 0.6, "backbone_mode": "unfreeze_last_4"},
-            {"start_frac": 0.7, "p_min": 0.80, "p_max": 1.00, "t_max": 1.0, "backbone_mode": "unfreeze_all"},
+            {"start_frac": 0.2, "p_min": 0.40, "p_max": 0.70, "t_max": 0.6, "backbone_mode": "unfreeze_last_4"},
+            {"start_frac": 0.5, "p_min": 0.80, "p_max": 1.00, "t_max": 1.0, "backbone_mode": "unfreeze_all"},
         ]
         # derive robust start epochs ensuring stage 1 starts at 0 and subsequent stages do not collapse
         prev_start = 0
@@ -217,6 +219,7 @@ class Denoiser(nn.Module):
         self.P_std = args.P_std
         self.t_eps = args.t_eps
         self.noise_scale = args.noise_scale
+        self.lambda_mask = getattr(args, "lambda_mask", 1.0)
 
         # ema
         self.ema_decay1 = args.ema_decay1
@@ -275,11 +278,22 @@ class Denoiser(nn.Module):
     def forward(self, x, labels):
         labels_dropped = self.drop_labels(labels) if self.training else labels
 
-        z, t = self.mosaic_engine.corrupt(x, self.sample_t)
-        x_pred = self.net(z, t, labels_dropped)
+        z, t, mask_gt_patch = self.mosaic_engine.corrupt(x, self.sample_t)
+        net_out = self.net(z, t, labels_dropped)
+        if isinstance(net_out, tuple):
+            x_pred, mask_logits = net_out
+        else:
+            x_pred, mask_logits = net_out, None
 
         loss_v, x_mse = self._compute_losses(x, z, t, x_pred)
-        return loss_v, x_mse
+        loss_mask = None
+        if isinstance(self.net, DINOv2Diffuser) and mask_logits is not None:
+            # mask supervision is defined in patch space: (B, N, 1)
+            bce = nn.BCEWithLogitsLoss()
+            loss_mask = bce(mask_logits, mask_gt_patch.to(dtype=mask_logits.dtype))
+            loss_v = loss_v + self.lambda_mask * loss_mask
+
+        return loss_v, x_mse, loss_mask
 
     @torch.no_grad()
     def generate(self, labels):
@@ -307,11 +321,13 @@ class Denoiser(nn.Module):
     @torch.no_grad()
     def _forward_sample(self, z, t, labels):
         # conditional
-        x_cond = self.net(z, t.flatten(), labels)
+        net_out_cond = self.net(z, t.flatten(), labels)
+        x_cond = net_out_cond[0] if isinstance(net_out_cond, tuple) else net_out_cond
         v_cond = (x_cond - z) / (1.0 - t).clamp_min(self.t_eps)
 
         # unconditional
-        x_uncond = self.net(z, t.flatten(), torch.full_like(labels, self.num_classes))
+        net_out_uncond = self.net(z, t.flatten(), torch.full_like(labels, self.num_classes))
+        x_uncond = net_out_uncond[0] if isinstance(net_out_uncond, tuple) else net_out_uncond
         v_uncond = (x_uncond - z) / (1.0 - t).clamp_min(self.t_eps)
 
         # cfg interval
