@@ -71,7 +71,8 @@ class MosaicNoisingEngine:
             t = torch.full((bsz,), float(fixed_t), device=device, dtype=x_start.dtype)
         else:
             t = sample_t_fn(bsz, device=device)
-            t = t.clamp(max=self.t_max)
+            # curriculum t_max refers to max noise => min signal = 1 - t_max
+            t = t.clamp(min=1.0 - self.t_max)
         t_view = t.view(bsz, *([1] * (x_start.ndim - 1)))
 
         # full noisy candidate
@@ -105,8 +106,17 @@ class CurriculumController:
             {"start_frac": 0.3, "p_min": 0.40, "p_max": 0.70, "t_max": 0.6, "backbone_mode": "unfreeze_last_4"},
             {"start_frac": 0.7, "p_min": 0.80, "p_max": 1.00, "t_max": 1.0, "backbone_mode": "unfreeze_all"},
         ]
-        for stage in self.stages:
-            stage["start_epoch"] = int(stage["start_frac"] * self.total_epochs)
+        # derive robust start epochs ensuring stage 1 starts at 0 and subsequent stages do not collapse
+        prev_start = 0
+        for i, stage in enumerate(self.stages):
+            if i == 0:
+                stage["start_epoch"] = 0
+                prev_start = 0
+                continue
+            start_ep = int(stage["start_frac"] * self.total_epochs)
+            start_ep = max(prev_start + 1, start_ep if start_ep > 0 else 1)
+            stage["start_epoch"] = start_ep
+            prev_start = start_ep
         self.stages = sorted(self.stages, key=lambda s: s["start_epoch"])
 
     def _resolve_stage_idx(self, epoch: int) -> int:

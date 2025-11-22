@@ -333,6 +333,7 @@ def run_multistep_restoration(model_without_ddp, data_loader_val, device, epoch,
     if curriculum_state is None:
         return
     t_max = float(curriculum_state.get("t_max", 1.0))
+    start_t = 1.0 - t_max  # curriculum t_max is max noise, so signal starts at 1 - t_max
 
     # swap to EMA params
     model_state_dict = copy.deepcopy(model_without_ddp.state_dict())
@@ -373,13 +374,13 @@ def run_multistep_restoration(model_without_ddp, data_loader_val, device, epoch,
         torch.manual_seed(1234)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(1234)
-        z_mosaic, t_clamped = model_without_ddp.mosaic_engine.corrupt(x, model_without_ddp.sample_t, fixed_t=t_max)
+        z_mosaic, t_clamped = model_without_ddp.mosaic_engine.corrupt(x, model_without_ddp.sample_t, fixed_t=start_t)
 
     # single-step prediction
     x_pred_single = model_without_ddp.net(z_mosaic, t_clamped, y)
 
     # partial trajectory integration from t_max -> 0
-    timesteps = torch.linspace(t_max, 0.0, args.num_sampling_steps + 1, device=device, dtype=x.dtype)
+    timesteps = torch.linspace(start_t, 1.0, args.num_sampling_steps + 1, device=device, dtype=x.dtype)
     z_cur = z_mosaic
     def _forward_flow(z, t_scalar):
         t_view = t_scalar.view(-1, *([1] * (z.ndim - 1)))
