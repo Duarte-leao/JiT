@@ -38,7 +38,7 @@ def _apply_gating(x_pred: torch.Tensor, mask_patch_logits: Optional[torch.Tensor
     mask_pixel = _upsample_patch_mask(mask_patch_logits, patch_size, x_pred.shape[2], x_pred.shape[3])
     if mask_pixel is None:
         return x_pred
-    gate = torch.sigmoid(mask_pixel.to(dtype=x_pred.dtype))
+    gate = torch.sigmoid(mask_pixel.to(dtype=x_pred.dtype)/0.2)
     return gate * x_pred + (1 - gate) * z_input
 
 
@@ -666,7 +666,7 @@ def run_clean_reconstruction(model_without_ddp, data_loader_val, device, epoch, 
     else:
         x_rec, mask_logits_patch = net_out, None
     patch_size = model_without_ddp.mosaic_engine.patch_size
-    x_rec = _apply_gating(x_rec, mask_logits_patch, x, patch_size)
+    # x_rec = _apply_gating(x_rec, mask_logits_patch, x, patch_size)
 
     def denorm(tensor):
         return torch.clamp((tensor + 1) / 2, 0.0, 1.0)

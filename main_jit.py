@@ -117,9 +117,9 @@ def get_args_parser():
     parser.add_argument('--wandb_run_name', default=None, type=str, help='W&B run name (optional)')
     parser.add_argument('--recons_freq', default=1, type=int, help='Epoch frequency for reconstruction logging (0 to disable)')
     parser.add_argument('--num_recons', default=16, type=int, help='Number of validation examples for recon grids')
-    parser.add_argument('--restoration_eval_freq', default=5, type=int, help='Epoch frequency for restoration eval (PSNR/LPIPS)')
+    parser.add_argument('--restoration_eval_freq', default=0, type=int, help='Epoch frequency for restoration eval (PSNR/LPIPS)')
     parser.add_argument('--restoration_eval_num', default=8, type=int, help='Number of validation samples for restoration eval')
-    parser.add_argument('--recons_multistep_freq', default=20, type=int, help='Epoch frequency for multi-step restoration visualization (0 to disable)')
+    parser.add_argument('--recons_multistep_freq', default=5, type=int, help='Epoch frequency for multi-step restoration visualization (0 to disable)')
 
     return parser
 
