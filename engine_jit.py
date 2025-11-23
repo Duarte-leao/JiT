@@ -426,11 +426,11 @@ def run_multistep_restoration(model_without_ddp, data_loader_val, device, epoch,
     # single-step prediction
     net_out_single = model_without_ddp.net(z_mosaic, t_clamped, y)
     if isinstance(net_out_single, tuple):
-        x_pred_single, mask_logits_patch = net_out_single
+        x_pred_single, mask_logits_init = net_out_single
     else:
-        x_pred_single, mask_logits_patch = net_out_single, None
+        x_pred_single, mask_logits_init = net_out_single, None
     patch_size = model_without_ddp.mosaic_engine.patch_size
-    x_final_single = _apply_gating(x_pred_single, mask_logits_patch, z_mosaic, patch_size)
+    x_final_single = _apply_gating(x_pred_single, mask_logits_init, z_mosaic, patch_size)
 
     # partial trajectory integration from t_max -> 0
     timesteps = torch.linspace(start_t, 1.0, args.num_sampling_steps + 1, device=device, dtype=x.dtype)
@@ -462,7 +462,8 @@ def run_multistep_restoration(model_without_ddp, data_loader_val, device, epoch,
     x_gt = denorm(x)
     x_mosaic = denorm(z_mosaic)
     x_single = denorm(x_final_single)
-    x_multi = denorm(_apply_gating(x_pred_multi, mask_logits_patch, z_mosaic, patch_size))
+    # gate final state once using the initial mask prediction
+    x_multi = denorm(_apply_gating(x_pred_multi, mask_logits_init, z_mosaic, patch_size))
 
     # metrics: PSNR/LPIPS for single and multi
     def _psnr(a, b):
@@ -477,7 +478,7 @@ def run_multistep_restoration(model_without_ddp, data_loader_val, device, epoch,
     if lpips_loss_fn is not None:
         lpips_loss_fn = lpips_loss_fn.to(device)
         lpips_single = lpips_loss_fn(x, x_final_single).flatten().mean().item()
-        lpips_multi = lpips_loss_fn(x, _apply_gating(x_pred_multi, mask_logits_patch, z_mosaic, patch_size)).flatten().mean().item()
+        lpips_multi = lpips_loss_fn(x, _apply_gating(x_pred_multi, mask_logits_init, z_mosaic, patch_size)).flatten().mean().item()
 
     # grids (limit to 32 panels)
     panels = []

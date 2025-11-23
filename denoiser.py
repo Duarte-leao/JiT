@@ -81,9 +81,9 @@ class MosaicNoisingEngine:
         z_noisy = t_view * x_start + (1 - t_view) * e
 
         # patch mask generation on grid and upsample to pixel space
-        mask_grid = self._sample_mask(bsz, device=device)  # (B,1,grid_h,grid_w)
+        mask_grid = self._sample_mask(bsz, device=device)  # (B,1,grid_h,grid_w), 1 = noisy
         mask_pixel = mask_grid.repeat_interleave(self.patch_size, dim=2).repeat_interleave(self.patch_size, dim=3)
-        mask_patch = mask_grid.flatten(2).transpose(1, 2)  # (B, N, 1)
+        mask_patch = mask_grid.flatten(2).transpose(1, 2)  # (B, N, 1) aligned with patch tokens
 
         # compose mosaic
         z_out = x_start * (1 - mask_pixel) + z_noisy * mask_pixel

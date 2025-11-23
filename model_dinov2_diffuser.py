@@ -202,8 +202,8 @@ class DINOv2Diffuser(nn.Module):
             tokens = block(tokens)
         tokens = self.backbone.norm(tokens)
 
-        # decoder: drop conditioning + backbone prefix tokens
-        prefix_len = 2 + self.num_prefix_tokens
+        # decoder: drop conditioning + backbone prefix tokens; mask head must see the same slice
+        prefix_len = 2 + self.num_prefix_tokens  # 2 cond tokens + CLS/registers
         patch_tokens = tokens[:, prefix_len:, :]
         patch_tokens = self.decoder_norm(patch_tokens)
         img_tokens = self.decoder_linear(patch_tokens)
