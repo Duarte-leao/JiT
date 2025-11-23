@@ -104,11 +104,12 @@ class CurriculumController:
 
         # Stage definitions using fractional start points
         self.stages = [
-            {"start_frac": 0.0, "p_min": 0.10, "p_max": 0.30, "t_max": 0.3, "backbone_mode": "freeze"},
-            {"start_frac": 0.2, "p_min": 0.40, "p_max": 0.70, "t_max": 0.6, "backbone_mode": "unfreeze_last_4"},
-            {"start_frac": 0.5, "p_min": 0.80, "p_max": 1.00, "t_max": 1.0, "backbone_mode": "unfreeze_all"},
+            {"start_frac": 0.0, "p_min": 0.00, "p_max": 0.00, "t_max": 0.0, "backbone_mode": "unfreeze_last_4"},  # Stage 0: warmup
+            {"start_frac": 0.15, "p_min": 0.10, "p_max": 0.30, "t_max": 0.3, "backbone_mode": "unfreeze_last_4"},  # Stage 1
+            {"start_frac": 0.3, "p_min": 0.40, "p_max": 0.85, "t_max": 0.6, "backbone_mode": "unfreeze_last_4"},  # Stage 2
+            {"start_frac": 0.5, "p_min": 1.0, "p_max": 1.00, "t_max": 1.0, "backbone_mode": "unfreeze_all"},  # Stage 3
         ]
-        # derive robust start epochs ensuring stage 1 starts at 0 and subsequent stages do not collapse
+        # derive robust start epochs ensuring the first stage starts at 0 and subsequent stages do not collapse
         prev_start = 0
         for i, stage in enumerate(self.stages):
             if i == 0:
@@ -183,7 +184,7 @@ class CurriculumController:
             return None
         stage_cfg = self.stages[self.current_stage_idx]
         return {
-            "stage": self.current_stage_idx + 1,
+            "stage": self.current_stage_idx,
             "p_min": stage_cfg.get("p_min", 0.0),
             "p_max": stage_cfg.get("p_max", 0.0),
             "t_max": stage_cfg.get("t_max", 0.0),
@@ -290,7 +291,7 @@ class Denoiser(nn.Module):
         if isinstance(self.net, DINOv2Diffuser) and mask_logits is not None:
             # mask supervision is defined in patch space: (B, N, 1)
             bce = nn.BCEWithLogitsLoss()
-            loss_mask = bce(mask_logits, mask_gt_patch.to(dtype=mask_logits.dtype))
+            loss_mask = bce(mask_logits/2, mask_gt_patch.to(dtype=mask_logits.dtype))
             loss_v = loss_v + self.lambda_mask * loss_mask
 
         return loss_v, x_mse, loss_mask

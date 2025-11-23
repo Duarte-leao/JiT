@@ -5,6 +5,7 @@ __pycache__/
 *.pyc
 output_dinov2_val/
 output_dinov2_mask_pred/
+output_dinov2_mask_pred_4stages/
 wandb/
 plan.md
 .ipynb_checkpoints

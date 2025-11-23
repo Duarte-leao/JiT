@@ -47,6 +47,26 @@ class LabelEmbedder(nn.Module):
         return self.embedding_table(labels)
 
 
+class MLPDecoder(nn.Module):
+    """
+    Per-patch renderer: expands token channels, applies non-linearity + RMSNorm, and projects to RGB pixels.
+    """
+
+    def __init__(self, embed_dim: int, out_dim: int):
+        super().__init__()
+        self.fc1 = nn.Linear(embed_dim, 4 * embed_dim, bias=True)
+        self.act = nn.GELU()
+        self.norm = RMSNorm(4 * embed_dim)
+        self.fc2 = nn.Linear(4 * embed_dim, out_dim, bias=True)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.fc1(x)
+        x = self.act(x)
+        x = self.norm(x)
+        x = self.fc2(x)
+        return x
+
+
 class DINOv2Diffuser(nn.Module):
     """
     Wraps a pre-trained DINOv2 ViT encoder as a diffusion backbone using token-based conditioning.
@@ -83,8 +103,7 @@ class DINOv2Diffuser(nn.Module):
         torch.nn.init.normal_(self.cond_pos_embed, std=0.02)
 
         # decoder head
-        self.decoder_norm = RMSNorm(self.embed_dim)
-        self.decoder_linear = nn.Linear(self.embed_dim, self.patch_size[0] * self.patch_size[1] * 3)
+        self.decoder = MLPDecoder(self.embed_dim, self.patch_size[0] * self.patch_size[1] * 3)
         self.mask_head = nn.Linear(self.embed_dim, 1)
 
         # imagenet normalization buffers
@@ -129,7 +148,7 @@ class DINOv2Diffuser(nn.Module):
         return grid
 
     def _ensure_trainable_cond_and_decoder(self):
-        for module in [self.t_embedder, self.y_embedder, self.cond_pos_embed, self.decoder_norm, self.decoder_linear, self.mask_head]:
+        for module in [self.t_embedder, self.y_embedder, self.cond_pos_embed, self.decoder, self.mask_head]:
             for p in module.parameters() if hasattr(module, "parameters") else [module]:
                 p.requires_grad = True
 
@@ -205,8 +224,7 @@ class DINOv2Diffuser(nn.Module):
         # decoder: drop conditioning + backbone prefix tokens; mask head must see the same slice
         prefix_len = 2 + self.num_prefix_tokens  # 2 cond tokens + CLS/registers
         patch_tokens = tokens[:, prefix_len:, :]
-        patch_tokens = self.decoder_norm(patch_tokens)
-        img_tokens = self.decoder_linear(patch_tokens)
+        img_tokens = self.decoder(patch_tokens)
         mask_logits = self.mask_head(patch_tokens)  # (B, N, 1)
 
         # reshape back to image space
