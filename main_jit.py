@@ -55,7 +55,8 @@ def get_args_parser():
     parser.add_argument('--noise_scale', default=1.0, type=float)
     parser.add_argument('--t_eps', default=5e-2, type=float)
     parser.add_argument('--label_drop_prob', default=0.1, type=float)
-    parser.add_argument('--lambda_mask', default=1.0, type=float, help='Weight for auxiliary mask BCE loss')
+    parser.add_argument('--lambda_mask', default=0.0, type=float, help='Weight for auxiliary mask BCE loss')
+    parser.add_argument('--lambda_feature', default=1.0, type=float, help='Weight for semantic feature matching loss')
 
     parser.add_argument('--seed', default=0, type=int)
     parser.add_argument('--start_epoch', default=0, type=int, metavar='N',

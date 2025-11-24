@@ -2,8 +2,10 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from transformers import Dinov2WithRegistersModel, AutoConfig
 
 from util.model_util import RMSNorm
+from decoder import GeneralDecoder
 
 
 class TimestepEmbedder(nn.Module):
@@ -72,14 +74,19 @@ class DINOv2Diffuser(nn.Module):
     Wraps a pre-trained DINOv2 ViT encoder as a diffusion backbone using token-based conditioning.
     """
 
-    def __init__(self, input_size: int = 224, num_classes: int = 10, model_key: str = "dinov2_vitb14", **_kwargs):
+    def __init__(self, input_size: int = 256, num_classes: int = 10, model_key: str = "dinov2_vitb14", decoder_config_path: str ="configs", pretrained_decoder_path='models/decoders/dinov2/wReg_base/ViTXL_n08/model.pt',**_kwargs):
         super().__init__()
         self.input_size = input_size
         self.num_classes = num_classes
         self.model_key = model_key
 
         # load pretrained backbone
-        self.backbone = torch.hub.load('facebookresearch/dinov2', model_key, pretrained=True)
+        # self.backbone = torch.hub.load('facebookresearch/dinov2', model_key, pretrained=True)
+        self.backbone = torch.hub.load('facebookresearch/dinov2', "dinov2_vitb14_reg", pretrained=True)
+        # self.backbone = Dinov2WithRegistersModel.from_pretrained("facebook/dinov2-with-registers-base", local_files_only=False)
+        # self.backbone.layernorm.elementwise_affine = False
+        # self.backbone.layernorm.weight = None
+        # self.backbone.layernorm.bias = None
 
         self.patch_size = self._resolve_patch_size()
         assert self.patch_size[0] == self.patch_size[1], "Non-square patches are not supported."
@@ -103,7 +110,27 @@ class DINOv2Diffuser(nn.Module):
         torch.nn.init.normal_(self.cond_pos_embed, std=0.02)
 
         # decoder head
-        self.decoder = MLPDecoder(self.embed_dim, self.patch_size[0] * self.patch_size[1] * 3)
+        # self.decoder = MLPDecoder(self.embed_dim, self.patch_size[0] * self.patch_size[1] * 3)
+        self.backbone_input_size = self.input_size 
+        self.backbone_patch_size = self.backbone.patch_size
+        self.latent_dim = self.embed_dim
+        assert self.backbone_input_size % self.backbone_patch_size == 0, f"backbone_input_size {self.backbone_input_size} must be divisible by backbone_patch_size {self.backbone_patch_size}"
+        self.base_patches = (self.backbone_input_size // self.backbone_patch_size) ** 2 # number of patches of the latent
+        
+        # decoder
+        decoder_config = AutoConfig.from_pretrained(decoder_config_path)
+        decoder_config.hidden_size = self.latent_dim # set the hidden size of the decoder to be the same as the encoder's output
+         
+        decoder_config.image_size = int(decoder_config.patch_size * torch.sqrt(torch.tensor(self.base_patches))) 
+        self.decoder = GeneralDecoder(decoder_config, num_patches=self.base_patches)
+
+        # # load pretrained decoder weights
+        if pretrained_decoder_path is not None:
+            print(f"Loading pretrained decoder from {pretrained_decoder_path}")
+            state_dict = torch.load(pretrained_decoder_path, map_location='cpu')
+            keys = self.decoder.load_state_dict(state_dict, strict=False)
+            if len(keys.missing_keys) > 0:
+                print(f"Missing keys when loading pretrained decoder: {keys.missing_keys}")
         self.mask_head = nn.Linear(self.embed_dim, 1)
 
         # imagenet normalization buffers
@@ -141,9 +168,13 @@ class DINOv2Diffuser(nn.Module):
 
     def _resolve_pretrain_grid(self):
         prefix = self.num_prefix_tokens
+        print("prefix", prefix)
         total_tokens = self.backbone.pos_embed.shape[1]
+        print("total tokens", total_tokens)
         patch_tokens = total_tokens - prefix
+        print("patch tokens", patch_tokens)
         grid = int(round(patch_tokens ** 0.5))
+        print("grid", grid)
         assert grid * grid == patch_tokens, "Patch token count is not a perfect square."
         return grid
 
@@ -183,7 +214,7 @@ class DINOv2Diffuser(nn.Module):
         patch_pos = patch_pos.permute(0, 2, 3, 1).reshape(1, h * w, self.embed_dim)
         return prefix, patch_pos
 
-    def forward(self, x: torch.Tensor, t: torch.Tensor, y: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor, t: torch.Tensor = None, y: torch.Tensor = None, return_features: bool = False):
         # map [-1, 1] -> [0, 1], clamp, then ImageNet normalize
         x = (x + 1) * 0.5
         x = x.clamp(0.0, 1.0)
@@ -194,6 +225,10 @@ class DINOv2Diffuser(nn.Module):
         B, _, H, W = x.shape
         assert H == self.input_size and W == self.input_size, "Input resolution mismatch."
         H_p, W_p = H // self.patch_size[0], W // self.patch_size[1]
+        patch_tokens_per_side = H_p * W_p
+
+        # conditioning tokens (student) are injected only if both t and y are provided
+        has_cond = t is not None and y is not None
 
         # patch embed
         patch_tokens = self.backbone.patch_embed(x)  # (B, H_p*W_p, D)
@@ -209,26 +244,41 @@ class DINOv2Diffuser(nn.Module):
             special_tokens = cls_token
         special_tokens = special_tokens + prefix_pos
 
-        # conditioning tokens with dedicated positional embeddings
-        t_emb = self.t_embedder(t)
-        y_emb = self.y_embedder(y)
-        cond_tokens = torch.stack((t_emb, y_emb), dim=1)
-        cond_tokens = cond_tokens + self.cond_pos_embed
+        tokens_list = [special_tokens, patch_tokens]
+        if has_cond:
+            # conditioning tokens with dedicated positional embeddings
+            t_emb = self.t_embedder(t)
+            y_emb = self.y_embedder(y)
+            cond_tokens = torch.stack((t_emb, y_emb), dim=1)
+            cond_tokens = cond_tokens + self.cond_pos_embed
+            tokens_list.insert(0, cond_tokens)
 
-        tokens = torch.cat([cond_tokens, special_tokens, patch_tokens], dim=1)
+        tokens = torch.cat(tokens_list, dim=1)
 
-        for block in self.backbone.blocks:
+        feature_idxs = {3, 7, 11}
+        features = []
+        for idx, block in enumerate(self.backbone.blocks):
             tokens = block(tokens)
+            if return_features and idx in feature_idxs:
+                # align CLS + patches regardless of conditioning/register tokens
+                cls_idx = 2 if has_cond else 0
+                patch_start = 2 + self.num_prefix_tokens if has_cond else self.num_prefix_tokens
+                cls_token_aligned = tokens[:, cls_idx:cls_idx + 1, :]
+                patch_tokens_aligned = tokens[:, patch_start:patch_start + patch_tokens_per_side, :]
+                aligned = torch.cat([cls_token_aligned, patch_tokens_aligned], dim=1)
+                features.append(aligned)
         tokens = self.backbone.norm(tokens)
 
         # decoder: drop conditioning + backbone prefix tokens; mask head must see the same slice
-        prefix_len = 2 + self.num_prefix_tokens  # 2 cond tokens + CLS/registers
+        prefix_len = (2 + self.num_prefix_tokens) if has_cond else self.num_prefix_tokens
         patch_tokens = tokens[:, prefix_len:, :]
         img_tokens = self.decoder(patch_tokens)
         mask_logits = self.mask_head(patch_tokens)  # (B, N, 1)
 
         # reshape back to image space
         output = self.unpatchify(img_tokens, H_p, W_p)
+        if return_features:
+            return output, mask_logits, features
         return output, mask_logits
 
     def unpatchify(self, x: torch.Tensor, h: int, w: int) -> torch.Tensor:
@@ -237,9 +287,12 @@ class DINOv2Diffuser(nn.Module):
         """
         p = self.patch_size[0]
         c = 3
+
+        x = x.logits
         x = x.reshape(shape=(x.shape[0], h, w, p, p, c))
         x = torch.einsum('bhwpqc->bchpwq', x)
-        return x.reshape(shape=(x.shape[0], c, h * p, w * p))
+        x = x.reshape(shape=(x.shape[0], c, h * p, w * p))
+        return x
 
 
 def DINOv2_JiT_S_14(**kwargs):

@@ -49,6 +49,7 @@ def train_one_epoch(model, model_without_ddp, data_loader, optimizer, device, ep
     metric_logger.add_meter('stage', misc.SmoothedValue(window_size=1, fmt='{value:d}'))
     metric_logger.add_meter('x_mse', misc.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     metric_logger.add_meter('mask_loss', misc.SmoothedValue(window_size=1, fmt='{value:.6f}'))
+    metric_logger.add_meter('feature_loss', misc.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     header = 'Epoch: [{}]'.format(epoch)
     print_freq = 20
 
@@ -84,9 +85,11 @@ def train_one_epoch(model, model_without_ddp, data_loader, optimizer, device, ep
 
         with torch.amp.autocast('cuda', dtype=torch.bfloat16):
             loss_out = model(x, labels)
-            loss = x_mse = mask_loss = None
+            loss = x_mse = mask_loss = feature_loss = None
             if isinstance(loss_out, tuple):
-                if len(loss_out) == 3:
+                if len(loss_out) == 4:
+                    loss, x_mse, mask_loss, feature_loss = loss_out
+                elif len(loss_out) == 3:
                     loss, x_mse, mask_loss = loss_out
                 elif len(loss_out) == 2:
                     loss, x_mse = loss_out
@@ -98,6 +101,7 @@ def train_one_epoch(model, model_without_ddp, data_loader, optimizer, device, ep
         loss_value = loss.item()
         x_mse_value = x_mse.item() if x_mse is not None else None
         mask_loss_value = mask_loss.item() if mask_loss is not None else None
+        feature_loss_value = feature_loss.item() if feature_loss is not None else None
         if not math.isfinite(loss_value):
             print("Loss is {}, stopping training".format(loss_value))
             sys.exit(1)
@@ -119,10 +123,13 @@ def train_one_epoch(model, model_without_ddp, data_loader, optimizer, device, ep
             metric_logger.update(x_mse=x_mse_value)
         if mask_loss_value is not None:
             metric_logger.update(mask_loss=mask_loss_value)
+        if feature_loss_value is not None:
+            metric_logger.update(feature_loss=feature_loss_value)
 
         loss_value_reduce = misc.all_reduce_mean(loss_value)
         x_mse_reduce = misc.all_reduce_mean(x_mse_value) if x_mse_value is not None else None
         mask_loss_reduce = misc.all_reduce_mean(mask_loss_value) if mask_loss_value is not None else None
+        feature_loss_reduce = misc.all_reduce_mean(feature_loss_value) if feature_loss_value is not None else None
 
         if log_writer is not None:
             # Use a monotonically increasing step across epochs/iters
@@ -134,6 +141,8 @@ def train_one_epoch(model, model_without_ddp, data_loader, optimizer, device, ep
                     log_writer.add_scalar('train/x_mse', x_mse_reduce, global_step)
                 if mask_loss_reduce is not None:
                     log_writer.add_scalar('train/mask_loss', mask_loss_reduce, global_step)
+                if feature_loss_reduce is not None:
+                    log_writer.add_scalar('train/feature_loss', feature_loss_reduce, global_step)
                 # curriculum metrics
                 if curriculum_state is not None:
                     log_writer.add_scalar('curriculum/stage', curriculum_state.get("stage", 0), global_step)
@@ -152,6 +161,8 @@ def train_one_epoch(model, model_without_ddp, data_loader, optimizer, device, ep
                             log_payload['train/x_mse'] = x_mse_reduce
                         if mask_loss_reduce is not None:
                             log_payload['train/mask_loss'] = mask_loss_reduce
+                        if feature_loss_reduce is not None:
+                            log_payload['train/feature_loss'] = feature_loss_reduce
                         if curriculum_state is not None:
                             log_payload.update({
                                 'curriculum/stage': curriculum_state.get("stage", 0),
@@ -305,7 +316,7 @@ def run_restoration_eval(model_without_ddp, data_loader_val, device, epoch, args
     else:
         x_pred, mask_logits_patch = net_out, None
     patch_size = model_without_ddp.mosaic_engine.patch_size
-    x_pred_gated = _apply_gating(x_pred, mask_logits_patch, z_mosaic, patch_size)
+    # x_pred_gated = _apply_gating(x_pred, mask_logits_patch, z_mosaic, patch_size)
 
     def denorm(tensor):
         return torch.clamp((tensor + 1) / 2, 0.0, 1.0)
@@ -430,7 +441,8 @@ def run_multistep_restoration(model_without_ddp, data_loader_val, device, epoch,
     else:
         x_pred_single, mask_logits_init = net_out_single, None
     patch_size = model_without_ddp.mosaic_engine.patch_size
-    x_final_single = _apply_gating(x_pred_single, mask_logits_init, z_mosaic, patch_size)
+    # x_final_single = _apply_gating(x_pred_single, mask_logits_init, z_mosaic, patch_size)
+    x_final_single = x_pred_single
 
     # partial trajectory integration from t_max -> 0
     timesteps = torch.linspace(start_t, 1.0, args.num_sampling_steps + 1, device=device, dtype=x.dtype)
@@ -574,7 +586,7 @@ def run_reconstructions(model_without_ddp, data_loader_val, device, epoch, args)
     else:
         x_pred, mask_logits_patch = net_out, None
     patch_size = model_without_ddp.mosaic_engine.patch_size
-    x_pred = _apply_gating(x_pred, mask_logits_patch, z_mosaic, patch_size)
+    # x_pred = _apply_gating(x_pred, mask_logits_patch, z_mosaic, patch_size)
 
     def denorm(tensor):
         return torch.clamp((tensor + 1) / 2, 0.0, 1.0)
@@ -667,7 +679,7 @@ def run_clean_reconstruction(model_without_ddp, data_loader_val, device, epoch, 
     else:
         x_rec, mask_logits_patch = net_out, None
     patch_size = model_without_ddp.mosaic_engine.patch_size
-    # x_rec = _apply_gating(x_rec, mask_logits_patch, x, patch_size)
+    # # x_rec = _apply_gating(x_rec, mask_logits_patch, x, patch_size)
 
     def denorm(tensor):
         return torch.clamp((tensor + 1) / 2, 0.0, 1.0)

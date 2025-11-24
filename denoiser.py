@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import copy
 from model_jit import JiT_models
 from model_dinov2_diffuser import DINOv2_JiT_S_14, DINOv2_JiT_B_14, DINOv2Diffuser
 
@@ -221,6 +222,7 @@ class Denoiser(nn.Module):
         self.t_eps = args.t_eps
         self.noise_scale = args.noise_scale
         self.lambda_mask = getattr(args, "lambda_mask", 1.0)
+        self.lambda_feature = getattr(args, "lambda_feature", 0.01)
 
         # ema
         self.ema_decay1 = args.ema_decay1
@@ -240,6 +242,23 @@ class Denoiser(nn.Module):
         # curriculum controller
         self.curriculum = CurriculumController(total_epochs=args.epochs, mosaic_engine=self.mosaic_engine, backbone=self.net)
         self.curriculum.set_epoch(args.start_epoch)
+
+        # frozen teacher (DINOv2 only)
+        if isinstance(self.net, DINOv2Diffuser):
+            self.teacher_model = copy.deepcopy(self.net)
+            for p in self.teacher_model.parameters():
+                p.requires_grad = False
+            self.teacher_model.eval()
+        else:
+            self.teacher_model = None
+            # disable feature loss for non-DINO configurations
+            self.lambda_feature = 0.0
+
+    def train(self, mode: bool = True):
+        super().train(mode)
+        if getattr(self, "teacher_model", None) is not None:
+            self.teacher_model.eval()
+        return self
 
     def get_curriculum_state(self):
         """Expose current curriculum state (stage + key parameters)."""
@@ -280,21 +299,47 @@ class Denoiser(nn.Module):
         labels_dropped = self.drop_labels(labels) if self.training else labels
 
         z, t, mask_gt_patch = self.mosaic_engine.corrupt(x, self.sample_t)
-        net_out = self.net(z, t, labels_dropped)
+        state = self.curriculum.get_curriculum_state() if hasattr(self, "curriculum") else None
+        stage_idx = state.get("stage", 3) if state is not None else 3
+
+        # feature matching is only active for DINOv2 students in stages < 3
+        use_feature_loss = self.training and stage_idx < 3 and getattr(self, "teacher_model", None) is not None
+
+        teacher_feats = None
+        if use_feature_loss:
+            with torch.no_grad():
+                teacher_out = self.teacher_model(x, return_features=True)
+                # teacher forward returns (x_pred, mask_logits, features)
+                if isinstance(teacher_out, tuple) and len(teacher_out) == 3:
+                    teacher_feats = teacher_out[2]
+
+        net_out = self.net(z, t, labels_dropped, return_features=use_feature_loss)
         if isinstance(net_out, tuple):
-            x_pred, mask_logits = net_out
+            if use_feature_loss and len(net_out) == 3:
+                x_pred, mask_logits, student_feats = net_out
+            else:
+                x_pred, mask_logits = net_out[0], net_out[1] if len(net_out) > 1 else None
+                student_feats = None
         else:
-            x_pred, mask_logits = net_out, None
+            x_pred, mask_logits, student_feats = net_out, None, None
 
         loss_v, x_mse = self._compute_losses(x, z, t, x_pred)
         loss_mask = None
+        loss_feat = None
         if isinstance(self.net, DINOv2Diffuser) and mask_logits is not None:
             # mask supervision is defined in patch space: (B, N, 1)
             bce = nn.BCEWithLogitsLoss()
             loss_mask = bce(mask_logits/2, mask_gt_patch.to(dtype=mask_logits.dtype))
             loss_v = loss_v + self.lambda_mask * loss_mask
 
-        return loss_v, x_mse, loss_mask
+        if use_feature_loss and teacher_feats is not None and student_feats is not None:
+            # mean over batch, tokens, channels per layer; sum over selected layers
+            loss_feat = 0.0
+            for sf, tf in zip(student_feats, teacher_feats):
+                loss_feat = loss_feat + (sf - tf).pow(2).mean(dim=(1, 2)).mean()
+            loss_v = loss_v + self.lambda_feature * loss_feat
+
+        return loss_v, x_mse, loss_mask, loss_feat
 
     @torch.no_grad()
     def generate(self, labels):
