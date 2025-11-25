@@ -200,12 +200,8 @@ class Denoiser(nn.Module):
         args
     ):
         super().__init__()
-        # enforce patch-size compatibility for DINOv2 backbones
-        if args.model in ['DINOv2-JiT-S/14', 'DINOv2-JiT-B/14'] and args.img_size % 14 != 0:
-            raise ValueError(
-                f"Model {args.model} requires img_size to be a multiple of 14 (e.g., 224, 280). "
-                f"Got img_size={args.img_size}."
-            )
+        # [REMOVED] The check for img_size % 14 != 0 is deleted here.
+        
         self.net = JiT_models[args.model](
             input_size=args.img_size,
             in_channels=3,
@@ -236,9 +232,16 @@ class Denoiser(nn.Module):
         self.cfg_scale = args.cfg
         self.cfg_interval = (args.interval_min, args.interval_max)
 
-        # mosaic noising engine (uses patch geometry from the backbone)
-        patch_size = self.net.patch_size if isinstance(self.net.patch_size, int) else self.net.patch_size[0]
+        # [UPDATED] mosaic noising engine setup
+        # We must use the DECODER patch size (16) if available, because that matches the img_size (256).
+        # Using the encoder patch size (14) would crash because 256 % 14 != 0.
+        if hasattr(self.net, "decoder_patch_size"):
+            patch_size = self.net.decoder_patch_size
+        else:
+            patch_size = self.net.patch_size if isinstance(self.net.patch_size, int) else self.net.patch_size[0]
+            
         self.mosaic_engine = MosaicNoisingEngine(img_size=self.img_size, patch_size=patch_size, device=torch.device(args.device))
+        
         # curriculum controller
         self.curriculum = CurriculumController(total_epochs=args.epochs, mosaic_engine=self.mosaic_engine, backbone=self.net)
         self.curriculum.set_epoch(args.start_epoch)
@@ -303,7 +306,7 @@ class Denoiser(nn.Module):
         stage_idx = state.get("stage", 3) if state is not None else 3
 
         # feature matching is only active for DINOv2 students in stages < 3
-        use_feature_loss = self.training and stage_idx < 3 and getattr(self, "teacher_model", None) is not None
+        use_feature_loss = self.training and stage_idx < 4 and getattr(self, "teacher_model", None) is not None
 
         teacher_feats = None
         if use_feature_loss:

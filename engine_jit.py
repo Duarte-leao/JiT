@@ -475,7 +475,8 @@ def run_multistep_restoration(model_without_ddp, data_loader_val, device, epoch,
     x_mosaic = denorm(z_mosaic)
     x_single = denorm(x_final_single)
     # gate final state once using the initial mask prediction
-    x_multi = denorm(_apply_gating(x_pred_multi, mask_logits_init, z_mosaic, patch_size))
+    # x_multi = denorm(_apply_gating(x_pred_multi, mask_logits_init, z_mosaic, patch_size))
+    x_multi = denorm(x_pred_multi)
 
     # metrics: PSNR/LPIPS for single and multi
     def _psnr(a, b):
@@ -490,7 +491,8 @@ def run_multistep_restoration(model_without_ddp, data_loader_val, device, epoch,
     if lpips_loss_fn is not None:
         lpips_loss_fn = lpips_loss_fn.to(device)
         lpips_single = lpips_loss_fn(x, x_final_single).flatten().mean().item()
-        lpips_multi = lpips_loss_fn(x, _apply_gating(x_pred_multi, mask_logits_init, z_mosaic, patch_size)).flatten().mean().item()
+        # lpips_multi = lpips_loss_fn(x, _apply_gating(x_pred_multi, mask_logits_init, z_mosaic, patch_size)).flatten().mean().item()
+        lpips_multi = lpips_loss_fn(x, x_pred_multi).flatten().mean().item()
 
     # grids (limit to 32 panels)
     panels = []

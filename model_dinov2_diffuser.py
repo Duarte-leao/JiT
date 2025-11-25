@@ -74,11 +74,13 @@ class DINOv2Diffuser(nn.Module):
     Wraps a pre-trained DINOv2 ViT encoder as a diffusion backbone using token-based conditioning.
     """
 
-    def __init__(self, input_size: int = 256, num_classes: int = 10, model_key: str = "dinov2_vitb14", decoder_config_path: str ="configs", pretrained_decoder_path='models/decoders/dinov2/wReg_base/ViTXL_n08/model.pt',**_kwargs):
+    def __init__(self, input_size: int = 256, num_classes: int = 10, model_key: str = "dinov2_vitb14", decoder_config_path: str ="configs", pretrained_decoder_path='models/decoders/dinov2/wReg_base/ViTXL_n08/model.pt', encoder_resolution: int = 224, decoder_patch_size: int = 16,**_kwargs):
         super().__init__()
         self.input_size = input_size
         self.num_classes = num_classes
         self.model_key = model_key
+        self.encoder_resolution = encoder_resolution
+        self.decoder_patch_size = decoder_patch_size
 
         # load pretrained backbone
         # self.backbone = torch.hub.load('facebookresearch/dinov2', model_key, pretrained=True)
@@ -90,11 +92,12 @@ class DINOv2Diffuser(nn.Module):
 
         self.patch_size = self._resolve_patch_size()
         assert self.patch_size[0] == self.patch_size[1], "Non-square patches are not supported."
-        if self.input_size % self.patch_size[0] != 0:
-            raise ValueError(
-                f"DINOv2 backbone expects img_size to be a multiple of patch size={self.patch_size[0]}. "
-                f"Got img_size={self.input_size}. Please set --img_size to a multiple of {self.patch_size[0]} (e.g., 224, 280)."
-            )
+        if self.encoder_resolution % self.patch_size[0] != 0:
+             raise ValueError(f"Encoder resolution {self.encoder_resolution} must be divisible by patch size {self.patch_size[0]}")
+
+        # 2. Check if INPUT resolution fits DECODER patch size (16)
+        if self.input_size % self.decoder_patch_size != 0:
+            raise ValueError(f"Input size {self.input_size} must be divisible by decoder patch size {self.decoder_patch_size}")
 
         # cache structural properties
         self.embed_dim = self._resolve_embed_dim()
@@ -111,12 +114,12 @@ class DINOv2Diffuser(nn.Module):
 
         # decoder head
         # self.decoder = MLPDecoder(self.embed_dim, self.patch_size[0] * self.patch_size[1] * 3)
-        self.backbone_input_size = self.input_size 
-        self.backbone_patch_size = self.backbone.patch_size
+        self.backbone_input_size = self.encoder_resolution  
+        self.backbone_patch_size = self.patch_size[0] # 14
         self.latent_dim = self.embed_dim
         assert self.backbone_input_size % self.backbone_patch_size == 0, f"backbone_input_size {self.backbone_input_size} must be divisible by backbone_patch_size {self.backbone_patch_size}"
         self.base_patches = (self.backbone_input_size // self.backbone_patch_size) ** 2 # number of patches of the latent
-        
+
         # decoder
         decoder_config = AutoConfig.from_pretrained(decoder_config_path)
         decoder_config.hidden_size = self.latent_dim # set the hidden size of the decoder to be the same as the encoder's output
@@ -167,14 +170,10 @@ class DINOv2Diffuser(nn.Module):
         return 0
 
     def _resolve_pretrain_grid(self):
-        prefix = self.num_prefix_tokens
-        print("prefix", prefix)
+        prefix_in_pos_embed = 1 
         total_tokens = self.backbone.pos_embed.shape[1]
-        print("total tokens", total_tokens)
-        patch_tokens = total_tokens - prefix
-        print("patch tokens", patch_tokens)
+        patch_tokens = total_tokens - prefix_in_pos_embed
         grid = int(round(patch_tokens ** 0.5))
-        print("grid", grid)
         assert grid * grid == patch_tokens, "Patch token count is not a perfect square."
         return grid
 
@@ -206,8 +205,10 @@ class DINOv2Diffuser(nn.Module):
 
     def _interpolate_pos_embed(self, h: int, w: int) -> torch.Tensor:
         pos_embed = self.backbone.pos_embed
-        prefix = pos_embed[:, :self.num_prefix_tokens]
-        patch_pos = pos_embed[:, self.num_prefix_tokens:]
+        # FIX: Split at 1 (CLS), not num_prefix_tokens (CLS+Registers)
+        prefix = pos_embed[:, :1] 
+        patch_pos = pos_embed[:, 1:] 
+        
         patch_pos = patch_pos.reshape(1, self.pretrain_grid_size, self.pretrain_grid_size, self.embed_dim)
         patch_pos = patch_pos.permute(0, 3, 1, 2)
         patch_pos = F.interpolate(patch_pos, size=(h, w), mode='bicubic', align_corners=False)
@@ -218,31 +219,48 @@ class DINOv2Diffuser(nn.Module):
         # map [-1, 1] -> [0, 1], clamp, then ImageNet normalize
         x = (x + 1) * 0.5
         x = x.clamp(0.0, 1.0)
-        x = (x - self.imgnet_mean.to(device=x.device, dtype=x.dtype)) / self.imgnet_std.to(
+
+        if x.shape[-1] != self.encoder_resolution:
+            x_encoder = F.interpolate(
+                x, 
+                size=(self.encoder_resolution, self.encoder_resolution), 
+                mode='bicubic', 
+                align_corners=False
+            )
+        else:
+            x_encoder = x
+        x_encoder = (x_encoder - self.imgnet_mean.to(device=x.device, dtype=x.dtype)) / self.imgnet_std.to(
             device=x.device, dtype=x.dtype
         )
 
         B, _, H, W = x.shape
         assert H == self.input_size and W == self.input_size, "Input resolution mismatch."
-        H_p, W_p = H // self.patch_size[0], W // self.patch_size[1]
+        H_p = self.encoder_resolution // self.patch_size[0]
+        W_p = self.encoder_resolution // self.patch_size[1]
         patch_tokens_per_side = H_p * W_p
 
-        # conditioning tokens (student) are injected only if both t and y are provided
         has_cond = t is not None and y is not None
 
-        # patch embed
-        patch_tokens = self.backbone.patch_embed(x)  # (B, H_p*W_p, D)
+        # --- CHANGED: Pass RESIZED image to backbone ---
+        patch_tokens = self.backbone.patch_embed(x_encoder)
         prefix_pos, patch_pos = self._interpolate_pos_embed(H_p, W_p)
         patch_tokens = patch_tokens + patch_pos
 
         # backbone special tokens
         cls_token = self.backbone.cls_token.expand(B, -1, -1)
+        
+        # FIX: Add pos embed to CLS *before* adding registers
+        cls_token = cls_token + prefix_pos 
+
         if self.num_registers > 0:
             register_tokens = self.backbone.register_tokens.expand(B, -1, -1)
+            # Registers don't get prefix_pos added to them
             special_tokens = torch.cat([cls_token, register_tokens], dim=1)
         else:
             special_tokens = cls_token
-        special_tokens = special_tokens + prefix_pos
+            # If no registers, cls_token already has pos added
+        
+        # REMOVED: special_tokens = special_tokens + prefix_pos (Logic moved up)
 
         tokens_list = [special_tokens, patch_tokens]
         if has_cond:
@@ -272,10 +290,11 @@ class DINOv2Diffuser(nn.Module):
         # decoder: drop conditioning + backbone prefix tokens; mask head must see the same slice
         prefix_len = (2 + self.num_prefix_tokens) if has_cond else self.num_prefix_tokens
         patch_tokens = tokens[:, prefix_len:, :]
+        
         img_tokens = self.decoder(patch_tokens)
-        mask_logits = self.mask_head(patch_tokens)  # (B, N, 1)
+        mask_logits = self.mask_head(patch_tokens)
 
-        # reshape back to image space
+        # reshape back to image space using unpatchify
         output = self.unpatchify(img_tokens, H_p, W_p)
         if return_features:
             return output, mask_logits, features
@@ -285,12 +304,15 @@ class DINOv2Diffuser(nn.Module):
         """
         x: (B, h*w, patch_size**2 * 3) -> (B, 3, H, W)
         """
-        p = self.patch_size[0]
+        # --- CHANGED: Use decoder patch size ---
+        p = self.decoder_patch_size # 16
         c = 3
 
         x = x.logits
+        # Reshape: (Batch, 16, 16, 16, 16, 3)
         x = x.reshape(shape=(x.shape[0], h, w, p, p, c))
         x = torch.einsum('bhwpqc->bchpwq', x)
+        # Final: (Batch, 3, 256, 256)
         x = x.reshape(shape=(x.shape[0], c, h * p, w * p))
         return x
 
