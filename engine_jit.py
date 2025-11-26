@@ -50,6 +50,7 @@ def train_one_epoch(model, model_without_ddp, data_loader, optimizer, device, ep
     metric_logger.add_meter('x_mse', misc.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     metric_logger.add_meter('mask_loss', misc.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     metric_logger.add_meter('feature_loss', misc.SmoothedValue(window_size=1, fmt='{value:.6f}'))
+    metric_logger.add_meter('lpips_loss', misc.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     header = 'Epoch: [{}]'.format(epoch)
     print_freq = 20
 
@@ -85,16 +86,18 @@ def train_one_epoch(model, model_without_ddp, data_loader, optimizer, device, ep
 
         with torch.amp.autocast('cuda', dtype=torch.bfloat16):
             loss_out = model(x, labels)
-            loss = x_mse = mask_loss = feature_loss = None
+            loss = x_mse = mask_loss = feature_loss = loss_lpips = None
             if isinstance(loss_out, tuple):
-                if len(loss_out) == 4:
-                    loss, x_mse, mask_loss, feature_loss = loss_out
-                elif len(loss_out) == 3:
-                    loss, x_mse, mask_loss = loss_out
-                elif len(loss_out) == 2:
-                    loss, x_mse = loss_out
-                else:
+                if len(loss_out) >= 1:
                     loss = loss_out[0]
+                if len(loss_out) >= 2:
+                    x_mse = loss_out[1]
+                if len(loss_out) >= 3:
+                    mask_loss = loss_out[2]
+                if len(loss_out) >= 4:
+                    feature_loss = loss_out[3]
+                if len(loss_out) >= 5:
+                    loss_lpips = loss_out[4]
             else:
                 loss = loss_out
 
@@ -102,6 +105,7 @@ def train_one_epoch(model, model_without_ddp, data_loader, optimizer, device, ep
         x_mse_value = x_mse.item() if x_mse is not None else None
         mask_loss_value = mask_loss.item() if mask_loss is not None else None
         feature_loss_value = feature_loss.item() if feature_loss is not None else None
+        loss_lpips_value = loss_lpips.item() if loss_lpips is not None else None
         if not math.isfinite(loss_value):
             print("Loss is {}, stopping training".format(loss_value))
             sys.exit(1)
@@ -125,11 +129,14 @@ def train_one_epoch(model, model_without_ddp, data_loader, optimizer, device, ep
             metric_logger.update(mask_loss=mask_loss_value)
         if feature_loss_value is not None:
             metric_logger.update(feature_loss=feature_loss_value)
+        if loss_lpips_value is not None:
+            metric_logger.update(lpips_loss=loss_lpips_value)
 
         loss_value_reduce = misc.all_reduce_mean(loss_value)
         x_mse_reduce = misc.all_reduce_mean(x_mse_value) if x_mse_value is not None else None
         mask_loss_reduce = misc.all_reduce_mean(mask_loss_value) if mask_loss_value is not None else None
         feature_loss_reduce = misc.all_reduce_mean(feature_loss_value) if feature_loss_value is not None else None
+        loss_lpips_reduce = misc.all_reduce_mean(loss_lpips_value) if loss_lpips_value is not None else None
 
         if log_writer is not None:
             # Use a monotonically increasing step across epochs/iters
@@ -143,6 +150,8 @@ def train_one_epoch(model, model_without_ddp, data_loader, optimizer, device, ep
                     log_writer.add_scalar('train/mask_loss', mask_loss_reduce, global_step)
                 if feature_loss_reduce is not None:
                     log_writer.add_scalar('train/feature_loss', feature_loss_reduce, global_step)
+                if loss_lpips_reduce is not None:
+                    log_writer.add_scalar('train/lpips_loss', loss_lpips_reduce, global_step)
                 # curriculum metrics
                 if curriculum_state is not None:
                     log_writer.add_scalar('curriculum/stage', curriculum_state.get("stage", 0), global_step)
@@ -163,6 +172,8 @@ def train_one_epoch(model, model_without_ddp, data_loader, optimizer, device, ep
                             log_payload['train/mask_loss'] = mask_loss_reduce
                         if feature_loss_reduce is not None:
                             log_payload['train/feature_loss'] = feature_loss_reduce
+                        if loss_lpips_reduce is not None:
+                            log_payload['train/lpips_loss'] = loss_lpips_reduce
                         if curriculum_state is not None:
                             log_payload.update({
                                 'curriculum/stage': curriculum_state.get("stage", 0),

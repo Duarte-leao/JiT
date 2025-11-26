@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 import copy
+import sys
+from pathlib import Path
 from model_jit import JiT_models
 from model_dinov2_diffuser import DINOv2_JiT_S_14, DINOv2_JiT_B_14, DINOv2Diffuser
 
@@ -219,6 +221,7 @@ class Denoiser(nn.Module):
         self.noise_scale = args.noise_scale
         self.lambda_mask = getattr(args, "lambda_mask", 1.0)
         self.lambda_feature = getattr(args, "lambda_feature", 0.01)
+        self.lambda_lpips = getattr(args, "lambda_lpips", 0.1)
 
         # ema
         self.ema_decay1 = args.ema_decay1
@@ -256,6 +259,36 @@ class Denoiser(nn.Module):
             self.teacher_model = None
             # disable feature loss for non-DINO configurations
             self.lambda_feature = 0.0
+
+        # LPIPS perceptual loss (optional)
+        self.lpips_model = None
+        lpips_class = None
+        # Try installed torch_fidelity first
+        try:
+            from torch_fidelity.disc.lpips import LPIPS as _LPIPS
+            lpips_class = _LPIPS
+        except Exception:
+            # Fallback to vendored torch-fidelity under src/torch-fidelity
+            lpips_root = Path(__file__).resolve().parent / "src" / "torch-fidelity"
+            if lpips_root.exists():
+                sys.path.insert(0, str(lpips_root))
+                try:
+                    from disc.lpips import LPIPS as _LPIPS
+                    lpips_class = _LPIPS
+                except Exception:
+                    lpips_class = None
+        if lpips_class is not None:
+            try:
+                self.lpips_model = lpips_class()
+                self.lpips_model.eval()
+                for p in self.lpips_model.parameters():
+                    p.requires_grad = False
+            except Exception as e:
+                print(f"WARNING: LPIPS initialization failed ({e}); Adaptive LPIPS loss disabled.")
+                self.lpips_model = None
+        else:
+            print("WARNING: LPIPS not found; Adaptive LPIPS loss disabled.")
+            self.lpips_model = None
 
     def train(self, mode: bool = True):
         super().train(mode)
@@ -329,6 +362,7 @@ class Denoiser(nn.Module):
         loss_v, x_mse = self._compute_losses(x, z, t, x_pred)
         loss_mask = None
         loss_feat = None
+        loss_lpips = None
         if isinstance(self.net, DINOv2Diffuser) and mask_logits is not None:
             # mask supervision is defined in patch space: (B, N, 1)
             bce = nn.BCEWithLogitsLoss()
@@ -342,7 +376,15 @@ class Denoiser(nn.Module):
                 loss_feat = loss_feat + (sf - tf).pow(2).mean(dim=(1, 2)).mean()
             loss_v = loss_v + self.lambda_feature * loss_feat
 
-        return loss_v, x_mse, loss_mask, loss_feat
+        if self.training and self.lpips_model is not None and self.lambda_lpips > 0:
+            with torch.cuda.amp.autocast(enabled=False):
+                loss_per_sample = self.lpips_model(x_pred.float(), x.float(), reduction="none")
+            weights = t.view(-1, 1, 1, 1).float()
+            loss_lpips = (loss_per_sample * weights).mean()
+            loss_lpips = loss_lpips.to(loss_v.dtype)
+            loss_v = loss_v + self.lambda_lpips * loss_lpips
+
+        return loss_v, x_mse, loss_mask, loss_feat, loss_lpips
 
     @torch.no_grad()
     def generate(self, labels):
