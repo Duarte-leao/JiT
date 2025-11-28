@@ -85,11 +85,10 @@ class DINOv2Diffuser(nn.Module):
         # load pretrained backbone
         # self.backbone = torch.hub.load('facebookresearch/dinov2', model_key, pretrained=True)
         self.backbone = torch.hub.load('facebookresearch/dinov2', "dinov2_vitb14_reg", pretrained=True)
-        # self.backbone = Dinov2WithRegistersModel.from_pretrained("facebook/dinov2-with-registers-base", local_files_only=False)
-        # self.backbone.layernorm.elementwise_affine = False
-        # self.backbone.layernorm.weight = None
-        # self.backbone.layernorm.bias = None
-
+        self.backbone.norm.elementwise_affine = False
+        self.backbone.norm.weight = None
+        self.backbone.norm.bias = None
+        
         self.patch_size = self._resolve_patch_size()
         assert self.patch_size[0] == self.patch_size[1], "Non-square patches are not supported."
         if self.encoder_resolution % self.patch_size[0] != 0:
@@ -216,6 +215,7 @@ class DINOv2Diffuser(nn.Module):
         return prefix, patch_pos
 
     def forward(self, x: torch.Tensor, t: torch.Tensor = None, y: torch.Tensor = None, return_features: bool = False):
+        
         # map [-1, 1] -> [0, 1], clamp, then ImageNet normalize
         x = (x + 1) * 0.5
         x = x.clamp(0.0, 1.0)
