@@ -107,10 +107,11 @@ class CurriculumController:
 
         # Stage definitions using fractional start points
         self.stages = [
-            {"start_frac": 0.0, "p_min": 0.00, "p_max": 0.00, "t_max": 0.0, "backbone_mode": "unfreeze_last_4"},  # Stage 0: warmup
-            {"start_frac": 0.08, "p_min": 0.10, "p_max": 0.30, "t_max": 0.3, "backbone_mode": "unfreeze_last_4"},  # Stage 1
-            {"start_frac": 0.20, "p_min": 0.40, "p_max": 0.85, "t_max": 0.6, "backbone_mode": "unfreeze_last_4"},  # Stage 2
-            {"start_frac": 0.5, "p_min": 1.0, "p_max": 1.00, "t_max": 1.0, "backbone_mode": "unfreeze_all"},  # Stage 3
+            # {"start_frac": 0.0, "p_min": 0.00, "p_max": 0.00, "t_max": 0.0, "backbone_mode": "unfreeze_last_4"},  # Stage 0: warmup
+            # {"start_frac": 0.08, "p_min": 0.10, "p_max": 0.30, "t_max": 0.3, "backbone_mode": "unfreeze_last_4"},  # Stage 1
+            # {"start_frac": 0.20, "p_min": 0.40, "p_max": 0.85, "t_max": 0.6, "backbone_mode": "unfreeze_last_4"},  # Stage 2
+            # {"start_frac": 0.5, "p_min": 1.0, "p_max": 1.00, "t_max": 1.0, "backbone_mode": "unfreeze_all"},  # Stage 3
+            {"start_frac": 0.0, "p_min": 1.0, "p_max": 1.00, "t_max": 1.0, "backbone_mode": "unfreeze_all"},  # Stage 3
         ]
         # derive robust start epochs ensuring the first stage starts at 0 and subsequent stages do not collapse
         prev_start = 0

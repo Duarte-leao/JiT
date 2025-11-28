@@ -6,8 +6,8 @@ __pycache__/
 output_dinov2_val/
 output_dinov2_decoder_and_Lpips_2/
 output_dinov2_decoder_and_Lpips_3/
-output_dinov2_decoder_and_Lpips/
-output_dinov2_decoder_pre/
+output_dinov2_decoder_and_Lpips_no_feat/
+output_dinov2_decoder_and_Lpips_no_curr/
 output_dinov2_decoder_pre_2/
 wandb/
 plan.md

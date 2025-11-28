@@ -240,6 +240,7 @@ class DINOv2Diffuser(nn.Module):
         patch_tokens_per_side = H_p * W_p
 
         has_cond = t is not None and y is not None
+        # has_cond = False
 
         # --- CHANGED: Pass RESIZED image to backbone ---
         patch_tokens = self.backbone.patch_embed(x_encoder)
@@ -296,6 +297,13 @@ class DINOv2Diffuser(nn.Module):
 
         # reshape back to image space using unpatchify
         output = self.unpatchify(img_tokens, H_p, W_p)
+
+        # 2. Denormalize (Match RAE behavior)
+        # Convert from ImageNet Norm -> [0, 1]
+        output = output * self.imgnet_std.to(output.device) + self.imgnet_mean.to(output.device)
+        
+        # # 3. Rescale to [-1, 1] (Match your Diffusion Target)
+        output = output * 2.0 - 1.0
         if return_features:
             return output, mask_logits, features
         return output, mask_logits
