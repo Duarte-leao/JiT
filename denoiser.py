@@ -378,7 +378,7 @@ class Denoiser(nn.Module):
             loss_v = loss_v + self.lambda_feature * loss_feat
 
         if self.training and self.lpips_model is not None and self.lambda_lpips > 0:
-            with torch.cuda.amp.autocast(enabled=False):
+            with torch.amp.autocast(device_type='cuda', enabled=False):
                 loss_per_sample = self.lpips_model(x_pred.float(), x.float(), reduction="none")
             weights = t.view(-1, 1, 1, 1).float()
             loss_lpips = (loss_per_sample * weights).mean()
