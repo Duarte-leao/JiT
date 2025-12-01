@@ -72,7 +72,14 @@ class MosaicNoisingEngine:
 
         # timestep sampling and clamping per stage (or fixed)
         if fixed_t is not None:
-            t = torch.full((bsz,), float(fixed_t), device=device, dtype=x_start.dtype)
+            if torch.is_tensor(fixed_t):
+                t = fixed_t.to(device=device, dtype=x_start.dtype).view(-1)
+                if t.numel() == 1 and bsz > 1:
+                    t = t.expand(bsz)
+                elif t.numel() != bsz:
+                    raise ValueError(f"fixed_t must have 1 or {bsz} elements, got {t.numel()}")
+            else:
+                t = torch.full((bsz,), float(fixed_t), device=device, dtype=x_start.dtype)
         else:
             t = sample_t_fn(bsz, device=device)
             # curriculum t_max refers to max noise => min signal = 1 - t_max
@@ -380,7 +387,8 @@ class Denoiser(nn.Module):
         if self.training and self.lpips_model is not None and self.lambda_lpips > 0:
             with torch.amp.autocast(device_type='cuda', enabled=False):
                 loss_per_sample = self.lpips_model(x_pred.float(), x.float(), reduction="none")
-            weights = t.view(-1, 1, 1, 1).float()
+            t_squared = t.pow(2)
+            weights = t_squared.view(-1, 1, 1, 1).float()
             loss_lpips = (loss_per_sample * weights).mean()
             loss_lpips = loss_lpips.to(loss_v.dtype)
             loss_v = loss_v + self.lambda_lpips * loss_lpips

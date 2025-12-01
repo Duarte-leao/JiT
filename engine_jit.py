@@ -391,20 +391,25 @@ def run_restoration_eval(model_without_ddp, data_loader_val, device, epoch, args
 @torch.no_grad()
 def run_multistep_restoration(model_without_ddp, data_loader_val, device, epoch, args):
     """
-    Multi-step restoration visualizer: starts from fixed-t mosaic, integrates t_max->0 with ODE steps,
-    compares single-step vs multi-step outputs, and logs PSNR/LPIPS plus a quad grid.
+    Multi-step restoration visualizer: 
+    - Uses a FIXED step size (dt) for all samples.
+    - Low noise samples reach t=1.0 quickly and then 'freeze' (dt=0).
+    - Returns the model's 'best guess' (x_pred) rather than the integrated path to avoid artifacts.
     """
+    args.num_sampling_steps = 7
     if data_loader_val is None or args.recons_multistep_freq <= 0 or args.restoration_eval_num <= 0:
         return
 
-    # curriculum state for t_max
+    # --- 1. Curriculum & Setup ---
     curriculum_state = model_without_ddp.get_curriculum_state() if hasattr(model_without_ddp, "get_curriculum_state") else None
     if curriculum_state is None:
         return
     t_max = float(curriculum_state.get("t_max", 1.0))
-    start_t = 1.0 - t_max  # curriculum t_max is max noise, so signal starts at 1 - t_max
+    start_t = 1.0 - t_max  
+    # Ceiling is 1.0. We don't subtract epsilon here because our new logic handles 1.0 gracefully.
+    signal_ceiling = 1.0 
 
-    # swap to EMA params
+    # Swap EMA
     model_state_dict = copy.deepcopy(model_without_ddp.state_dict())
     ema_state_dict = copy.deepcopy(model_without_ddp.state_dict())
     for i, (name, _value) in enumerate(model_without_ddp.named_parameters()):
@@ -415,7 +420,7 @@ def run_multistep_restoration(model_without_ddp, data_loader_val, device, epoch,
     was_training = model_without_ddp.training
     model_without_ddp.eval()
 
-    # fixed subset
+    # Load Batch
     imgs = []
     labels = []
     it = iter(data_loader_val)
@@ -428,68 +433,135 @@ def run_multistep_restoration(model_without_ddp, data_loader_val, device, epoch,
         labels.append(batch_labels)
     if len(imgs) == 0:
         model_without_ddp.load_state_dict(model_state_dict)
-        if was_training:
-            model_without_ddp.train()
+        if was_training: model_without_ddp.train()
         return
 
     x = torch.cat(imgs, dim=0)[:args.restoration_eval_num].to(device, non_blocking=True).float()
-    if x.max() > 1.0:
-        x.div_(255)
+    if x.max() > 1.0: x.div_(255)
     y = torch.cat(labels, dim=0)[:args.restoration_eval_num].to(device, non_blocking=True)
-    x = x * 2.0 - 1.0  # [-1,1]
+    x = x * 2.0 - 1.0 
 
-    # deterministic mosaic at fixed t_max
+    # --- 2. Initial Per-Sample Time ---
+    num_samples = x.shape[0]
+    # Distribute start times linearly from start_t to 1.0
+    if num_samples <= 1 or signal_ceiling <= start_t:
+        t_per_sample = torch.full((num_samples,), start_t, device=device, dtype=x.dtype)
+    else:
+        t_per_sample = torch.linspace(start_t, signal_ceiling, steps=num_samples, device=device, dtype=x.dtype)
+
+    # Corrupt Images
     with torch.random.fork_rng():
         torch.manual_seed(1234)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(1234)
-        z_mosaic, t_clamped, _ = model_without_ddp.mosaic_engine.corrupt(x, model_without_ddp.sample_t, fixed_t=start_t)
+        if torch.cuda.is_available(): torch.cuda.manual_seed_all(1234)
+        z_mosaic, t_per_sample, _ = model_without_ddp.mosaic_engine.corrupt(x, model_without_ddp.sample_t, fixed_t=t_per_sample)
 
-    # single-step prediction
-    net_out_single = model_without_ddp.net(z_mosaic, t_clamped, y)
-    if isinstance(net_out_single, tuple):
-        x_pred_single, mask_logits_init = net_out_single
-    else:
-        x_pred_single, mask_logits_init = net_out_single, None
-    patch_size = model_without_ddp.mosaic_engine.patch_size
-    # x_final_single = _apply_gating(x_pred_single, mask_logits_init, z_mosaic, patch_size)
+    # --- 3. Single Step Prediction ---
+    net_out_single = model_without_ddp.net(z_mosaic, t_per_sample, y)
+    x_pred_single = net_out_single[0] if isinstance(net_out_single, tuple) else net_out_single
     x_final_single = x_pred_single
 
-    # partial trajectory integration from t_max -> 0
-    timesteps = torch.linspace(start_t, 1.0, args.num_sampling_steps + 1, device=device, dtype=x.dtype)
+    # =================================================================================
+    # KEY CHANGE: FIXED STEP SCHEDULING
+    # =================================================================================
+    
+    # A. Determine the global fixed step size
+    # If we want 50 steps for a full 0->1 transition, dt is 0.02
+    dt = 1.0 / args.num_sampling_steps
+    
+    # B. Initialize schedule with 1.0 (The "Finished" state)
+    t_schedules = torch.ones((num_samples, args.num_sampling_steps + 1), device=device, dtype=x.dtype)
+    
+    # C. Fill trajectories
+    for i in range(num_samples):
+        start = t_per_sample[i].item()
+        
+        # Create a ramp: [0.98, 1.0, 1.02...]
+        # We use a small epsilon in arange end to ensure 1.0 is included if math aligns perfectly
+        ramp = torch.arange(start, 1.0 + 1e-5, dt, device=device, dtype=x.dtype)
+        
+        # Clamp values > 1.0 to 1.0
+        ramp = torch.clamp(ramp, max=1.0)
+        
+        # Insert into schedule
+        length = len(ramp)
+        if length > args.num_sampling_steps:
+             ramp = ramp[:args.num_sampling_steps]
+             length = args.num_sampling_steps
+             
+        t_schedules[i, :length] = ramp
+
+    # Init Loop Variables
     z_cur = z_mosaic
+    # Track the latest valid prediction. Start with the single-step guess.
+    latest_x_pred = x_pred_single.clone()
+
+    # =================================================================================
+    # KEY CHANGE: SAFE FLOW FUNCTION
+    # =================================================================================
     def _forward_flow(z, t_scalar):
         t_view = t_scalar.view(-1, *([1] * (z.ndim - 1)))
+        
+        # 1. Identify Active Samples (t < 1.0)
+        # If t is 1.0, the sample is finished. We must NOT divide by (1-t).
+        active_mask = (t_view < (1.0 - 1e-5)).float()
+        
+        # 2. Run Model
         net_out = model_without_ddp.net(z, t_scalar, y)
         x_pred = net_out[0] if isinstance(net_out, tuple) else net_out
-        v_pred = (x_pred - z) / (1.0 - t_view).clamp_min(model_without_ddp.t_eps)
-        return v_pred
+        
+        # 3. Calculate Velocity SAFELY
+        # Add epsilon to denominator to prevent NaN for finished samples.
+        # It doesn't matter what the result is for finished samples because we mask it out.
+        denominator = (1.0 - t_view).clamp_min(model_without_ddp.t_eps)
+        
+        raw_v_pred = (x_pred - z) / denominator
+        
+        # 4. Zero out velocity for finished samples
+        # Returns: 
+        # v_pred: velocity (0 if finished)
+        # x_pred: the raw model output (useful for updating our 'best guess')
+        # active_mask: tells us who is still running
+        return raw_v_pred * active_mask, x_pred, active_mask
 
-    for i in range(len(timesteps) - 1):
-        t = timesteps[i].expand(x.shape[0])
-        t_next = timesteps[i + 1].expand(x.shape[0])
+    # --- 4. Integration Loop ---
+    # We iterate N times. 
+    # For a sample starting at 0.98:
+    # i=0: t=0.98, t_next=1.0. dt=0.02. v_pred is calculated. z updates.
+    # i=1: t=1.0,  t_next=1.0. dt=0.00. v_pred is masked to 0. z updates by 0. (FROZEN)
+    for i in range(t_schedules.shape[1] - 1):
+        t = t_schedules[:, i]
+        t_next = t_schedules[:, i + 1]
+        
+        # dt for each sample (will be 0.0 for frozen samples)
+        dt_step = (t_next - t).view(-1, *([1] * (z_cur.ndim - 1)))
+        
         if model_without_ddp.method == "heun":
-            v_pred_t = _forward_flow(z_cur, t)
-            z_euler = z_cur + (t_next - t).view(-1, *([1] * (z_cur.ndim - 1))) * v_pred_t
-            v_pred_t_next = _forward_flow(z_euler, t_next)
+            v_pred_t, x_pred_t, mask_t = _forward_flow(z_cur, t)
+            
+            z_euler = z_cur + dt_step * v_pred_t
+            
+            # For the Heun lookahead:
+            # If t_next is 1.0, _forward_flow will correctly return 0 velocity
+            v_pred_t_next, _, _ = _forward_flow(z_euler, t_next)
+            
             v_pred = 0.5 * (v_pred_t + v_pred_t_next)
         else:
-            v_pred = _forward_flow(z_cur, t)
-        z_cur = z_cur + (t_next - t).view(-1, *([1] * (z_cur.ndim - 1))) * v_pred
+            v_pred_t, x_pred_t, mask_t = _forward_flow(z_cur, t)
+            v_pred = v_pred_t
+        # Update Trajectory (frozen samples add 0)
+        z_cur = z_cur + dt_step * v_pred
 
+
+    # Return the tracked best guess, not the integrated path
     x_pred_multi = z_cur
 
-    def denorm(tensor):
-        return torch.clamp((tensor + 1) / 2, 0.0, 1.0)
-
+    # --- 5. Metrics & Vis ---
+    def denorm(tensor): return torch.clamp((tensor + 1) / 2, 0.0, 1.0)
     x_gt = denorm(x)
     x_mosaic = denorm(z_mosaic)
     x_single = denorm(x_final_single)
-    # gate final state once using the initial mask prediction
-    # x_multi = denorm(_apply_gating(x_pred_multi, mask_logits_init, z_mosaic, patch_size))
     x_multi = denorm(x_pred_multi)
 
-    # metrics: PSNR/LPIPS for single and multi
     def _psnr(a, b):
         mse = (a - b).pow(2).flatten(1).mean(dim=1)
         return (-10.0 * torch.log10(mse.clamp_min(1e-10))).mean().item()
@@ -502,16 +574,13 @@ def run_multistep_restoration(model_without_ddp, data_loader_val, device, epoch,
     if lpips_loss_fn is not None:
         lpips_loss_fn = lpips_loss_fn.to(device)
         lpips_single = lpips_loss_fn(x, x_final_single).flatten().mean().item()
-        # lpips_multi = lpips_loss_fn(x, _apply_gating(x_pred_multi, mask_logits_init, z_mosaic, patch_size)).flatten().mean().item()
         lpips_multi = lpips_loss_fn(x, x_pred_multi).flatten().mean().item()
 
-    # grids (limit to 32 panels)
     panels = []
     for i in range(x_gt.size(0)):
         panel = torch.cat([x_gt[i], x_mosaic[i], x_single[i], x_multi[i]], dim=2)
         panels.append(panel)
-        if len(panels) >= 32:
-            break
+        if len(panels) >= 32: break
     grid = vutils.make_grid(panels, nrow=int(len(panels) ** 0.5) or 1)
 
     save_dir = os.path.join(args.output_dir, "images")
@@ -519,7 +588,6 @@ def run_multistep_restoration(model_without_ddp, data_loader_val, device, epoch,
     save_path = os.path.join(save_dir, f"epoch_{epoch}_multistep.png")
     vutils.save_image(grid, save_path)
 
-    # logging
     if log_writer := getattr(run_multistep_restoration, "_log_writer", None):
         log_writer.add_scalar('val/multistep_psnr', psnr_multi, epoch)
         if lpips_multi is not None:
@@ -537,14 +605,19 @@ def run_multistep_restoration(model_without_ddp, data_loader_val, device, epoch,
                 log_payload['val/multistep_lpips'] = lpips_multi
                 log_payload['val/multistep_lpips_single'] = lpips_single
             wandb.log(log_payload, step=eval_step)
-            wandb.log({"val/multistep_grid": wandb.Image(save_path, caption=f"epoch {epoch}, t_max={t_max}")}, step=eval_step)
+            t_min_vis = float(t_per_sample.min().item())
+            t_max_vis = float(t_per_sample.max().item())
+            wandb.log(
+                {"val/multistep_grid": wandb.Image(save_path, caption=f"epoch {epoch}, t_range=[{t_min_vis:.3f},{t_max_vis:.3f}]")},
+                step=eval_step,
+            )
         except Exception as e:
             print(f"W&B multistep log warning: {e}")
 
-    # restore state
     model_without_ddp.load_state_dict(model_state_dict)
     if was_training:
         model_without_ddp.train()
+
 
 
 @torch.no_grad()

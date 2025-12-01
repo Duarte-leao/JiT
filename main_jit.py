@@ -273,12 +273,26 @@ def main(args):
         if args.distributed:
             data_loader_train.sampler.set_epoch(epoch)
 
+        # # Reconstructions (main process only)
+        # if args.recons_freq > 0 and epoch % args.recons_freq == 0 and misc.is_main_process():
+        #     # from engine_jit import run_reconstructions  # local import to avoid circular deps
+        #     # run_reconstructions(model_without_ddp, data_loader_val, device, epoch, args)
+        #     from engine_jit import run_clean_reconstruction
+        #     setattr(run_clean_reconstruction, "_log_writer", log_writer)
+        #     run_clean_reconstruction(model_without_ddp, data_loader_val, device, epoch, args)
+
+        # # Multi-step recon visualizer (main process only)
+        # if args.recons_multistep_freq > 0 and epoch % args.recons_multistep_freq == 0 and misc.is_main_process() and log_writer is not None:
+        #     from engine_jit import run_multistep_restoration
+        #     setattr(run_multistep_restoration, "_log_writer", log_writer)
+        #     run_multistep_restoration(model_without_ddp, data_loader_val, device, epoch, args)
+
         train_one_epoch(model, model_without_ddp, data_loader_train, optimizer, device, epoch, log_writer=log_writer, args=args)
 
         # Reconstructions (main process only)
         if args.recons_freq > 0 and epoch % args.recons_freq == 0 and misc.is_main_process():
-            from engine_jit import run_reconstructions  # local import to avoid circular deps
-            run_reconstructions(model_without_ddp, data_loader_val, device, epoch, args)
+            # from engine_jit import run_reconstructions  # local import to avoid circular deps
+            # run_reconstructions(model_without_ddp, data_loader_val, device, epoch, args)
             from engine_jit import run_clean_reconstruction
             setattr(run_clean_reconstruction, "_log_writer", log_writer)
             run_clean_reconstruction(model_without_ddp, data_loader_val, device, epoch, args)
