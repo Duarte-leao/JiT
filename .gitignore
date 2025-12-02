@@ -1,5 +1,6 @@
 imagenette2/
-jit/
+jit_env/
+jit_experiments/
 .vscode/
 __pycache__/
 *.pyc

@@ -1,0 +1,467 @@
+W1202 08:32:21.832000 86216 site-packages/torch/distributed/run.py:793] 
+W1202 08:32:21.832000 86216 site-packages/torch/distributed/run.py:793] *****************************************
+W1202 08:32:21.832000 86216 site-packages/torch/distributed/run.py:793] Setting OMP_NUM_THREADS environment variable for each process to be 1 in default, to avoid your system being overloaded, please further tune the variable for optimal performance in your application as needed. 
+W1202 08:32:21.832000 86216 site-packages/torch/distributed/run.py:793] *****************************************
+| distributed init (rank 0): env://, gpu 0
+| distributed init (rank 2): env://, gpu 2
+[rank2]:[W1202 08:32:27.751389107 ProcessGroupNCCL.cpp:4115] [PG ID 0 PG GUID 0 Rank 2]  using GPU 2 to perform barrier as devices used by this process are currently unknown. This can potentially cause a hang if this rank to GPU mapping is incorrect.Specify device_ids in barrier() to force use of a particular device,or call init_process_group() with a device_id.
+[rank0]:[W1202 08:32:27.753251343 ProcessGroupNCCL.cpp:4115] [PG ID 0 PG GUID 0 Rank 0]  using GPU 0 to perform barrier as devices used by this process are currently unknown. This can potentially cause a hang if this rank to GPU mapping is incorrect.Specify device_ids in barrier() to force use of a particular device,or call init_process_group() with a device_id.
+| distributed init (rank 1): env://, gpu 1
+[rank1]:[W1202 08:32:27.763119034 ProcessGroupNCCL.cpp:4115] [PG ID 0 PG GUID 0 Rank 1]  using GPU 1 to perform barrier as devices used by this process are currently unknown. This can potentially cause a hang if this rank to GPU mapping is incorrect.Specify device_ids in barrier() to force use of a particular device,or call init_process_group() with a device_id.
+| distributed init (rank 3): env://, gpu 3
+[rank3]:[W1202 08:32:27.764788668 ProcessGroupNCCL.cpp:4115] [PG ID 0 PG GUID 0 Rank 3]  using GPU 3 to perform barrier as devices used by this process are currently unknown. This can potentially cause a hang if this rank to GPU mapping is incorrect.Specify device_ids in barrier() to force use of a particular device,or call init_process_group() with a device_id.
+[08:32:28.250776] Job directory: /ocean/projects/cis250277p/dsilva3/JiT
+[08:32:28.250959] Arguments:
+Namespace(model='DINOv2-JiT-B/14',
+img_size=256,
+attn_dropout=0.0,
+proj_dropout=0.0,
+epochs=500,
+warmup_epochs=5,
+batch_size=8,
+lr=None,
+blr=5e-05,
+min_lr=0.0,
+lr_schedule='constant',
+weight_decay=0.0,
+ema_decay1=0.9999,
+ema_decay2=0.9996,
+P_mean=-0.8,
+P_std=0.8,
+noise_scale=1.0,
+t_eps=0.05,
+label_drop_prob=0.1,
+lambda_mask=0.0,
+lambda_feature=0.0,
+lambda_lpips=2.0,
+seed=0,
+start_epoch=0,
+num_workers=12,
+pin_mem=True,
+sampling_method='heun',
+num_sampling_steps=50,
+cfg=1.0,
+interval_min=0.0,
+interval_max=1.0,
+num_images=50000,
+eval_freq=40,
+online_eval=False,
+evaluate_gen=False,
+gen_bsz=256,
+data_path='/ocean/datasets/community/imagenet',
+class_num=1000,
+output_dir='/ocean/projects/cis250277p/dsilva3/JiT/jit_experiments/output_dinov2_decoder_and_Lpips_no_feat',
+resume='',
+save_last_freq=1,
+log_freq=100,
+device='cuda',
+world_size=4,
+local_rank=-1,
+dist_on_itp=False,
+dist_url='env://',
+wandb=True,
+wandb_project='dinov2-jit-validation',
+wandb_entity=None,
+wandb_run_name='dinov2-jit-b14-img224_decoder_and_lpips_no_feat',
+recons_freq=1,
+num_recons=16,
+restoration_eval_freq=0,
+restoration_eval_num=8,
+recons_multistep_freq=1,
+rank=0,
+gpu=0,
+distributed=True,
+dist_backend='nccl')
+[08:32:30.957144] Dataset ImageFolder
+    Number of datapoints: 1281167
+    Root location: /ocean/datasets/community/imagenet/train
+    StandardTransform
+Transform: Compose(
+               Lambda()
+               RandomHorizontalFlip(p=0.5)
+               PILToTensor()
+           )
+[08:32:30.957452] Sampler_train = <torch.utils.data.distributed.DistributedSampler object at 0x14c43c7e0760>
+Using cache found in /jet/home/dsilva3/.cache/torch/hub/facebookresearch_dinov2_main
+/jet/home/dsilva3/.cache/torch/hub/facebookresearch_dinov2_main/dinov2/layers/swiglu_ffn.py:51: UserWarning: xFormers is not available (SwiGLU)
+  warnings.warn("xFormers is not available (SwiGLU)")
+/jet/home/dsilva3/.cache/torch/hub/facebookresearch_dinov2_main/dinov2/layers/attention.py:33: UserWarning: xFormers is not available (Attention)
+  warnings.warn("xFormers is not available (Attention)")
+/jet/home/dsilva3/.cache/torch/hub/facebookresearch_dinov2_main/dinov2/layers/block.py:40: UserWarning: xFormers is not available (Block)
+  warnings.warn("xFormers is not available (Block)")
+Using cache found in /jet/home/dsilva3/.cache/torch/hub/facebookresearch_dinov2_main
+Using cache found in /jet/home/dsilva3/.cache/torch/hub/facebookresearch_dinov2_main
+/jet/home/dsilva3/.cache/torch/hub/facebookresearch_dinov2_main/dinov2/layers/swiglu_ffn.py:51: UserWarning: xFormers is not available (SwiGLU)
+  warnings.warn("xFormers is not available (SwiGLU)")
+/jet/home/dsilva3/.cache/torch/hub/facebookresearch_dinov2_main/dinov2/layers/swiglu_ffn.py:51: UserWarning: xFormers is not available (SwiGLU)
+  warnings.warn("xFormers is not available (SwiGLU)")
+/jet/home/dsilva3/.cache/torch/hub/facebookresearch_dinov2_main/dinov2/layers/attention.py:33: UserWarning: xFormers is not available (Attention)
+  warnings.warn("xFormers is not available (Attention)")
+/jet/home/dsilva3/.cache/torch/hub/facebookresearch_dinov2_main/dinov2/layers/attention.py:33: UserWarning: xFormers is not available (Attention)
+  warnings.warn("xFormers is not available (Attention)")
+/jet/home/dsilva3/.cache/torch/hub/facebookresearch_dinov2_main/dinov2/layers/block.py:40: UserWarning: xFormers is not available (Block)
+  warnings.warn("xFormers is not available (Block)")
+/jet/home/dsilva3/.cache/torch/hub/facebookresearch_dinov2_main/dinov2/layers/block.py:40: UserWarning: xFormers is not available (Block)
+  warnings.warn("xFormers is not available (Block)")
+Using cache found in /jet/home/dsilva3/.cache/torch/hub/facebookresearch_dinov2_main
+/jet/home/dsilva3/.cache/torch/hub/facebookresearch_dinov2_main/dinov2/layers/swiglu_ffn.py:51: UserWarning: xFormers is not available (SwiGLU)
+  warnings.warn("xFormers is not available (SwiGLU)")
+/jet/home/dsilva3/.cache/torch/hub/facebookresearch_dinov2_main/dinov2/layers/attention.py:33: UserWarning: xFormers is not available (Attention)
+  warnings.warn("xFormers is not available (Attention)")
+/jet/home/dsilva3/.cache/torch/hub/facebookresearch_dinov2_main/dinov2/layers/block.py:40: UserWarning: xFormers is not available (Block)
+  warnings.warn("xFormers is not available (Block)")
+[08:32:34.970523] Loading pretrained decoder from models/decoders/dinov2/wReg_base/ViTXL_n08/model.pt
+/ocean/projects/cis250277p/dsilva3/JiT/model_dinov2_diffuser.py:132: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  state_dict = torch.load(pretrained_decoder_path, map_location='cpu')
+/ocean/projects/cis250277p/dsilva3/JiT/model_dinov2_diffuser.py:132: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  state_dict = torch.load(pretrained_decoder_path, map_location='cpu')
+/ocean/projects/cis250277p/dsilva3/JiT/model_dinov2_diffuser.py:132: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  state_dict = torch.load(pretrained_decoder_path, map_location='cpu')
+/ocean/projects/cis250277p/dsilva3/JiT/model_dinov2_diffuser.py:132: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  state_dict = torch.load(pretrained_decoder_path, map_location='cpu')
+/ocean/projects/cis250277p/dsilva3/JiT/jit_env/lib/python3.10/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.
+  warnings.warn(
+/ocean/projects/cis250277p/dsilva3/JiT/jit_env/lib/python3.10/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=VGG16_Weights.IMAGENET1K_V1`. You can also use `weights=VGG16_Weights.DEFAULT` to get the most up-to-date weights.
+  warnings.warn(msg)
+/ocean/projects/cis250277p/dsilva3/JiT/jit_env/lib/python3.10/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.
+  warnings.warn(
+/ocean/projects/cis250277p/dsilva3/JiT/jit_env/lib/python3.10/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=VGG16_Weights.IMAGENET1K_V1`. You can also use `weights=VGG16_Weights.DEFAULT` to get the most up-to-date weights.
+  warnings.warn(msg)
+/ocean/projects/cis250277p/dsilva3/JiT/jit_env/lib/python3.10/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.
+  warnings.warn(
+/ocean/projects/cis250277p/dsilva3/JiT/jit_env/lib/python3.10/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=VGG16_Weights.IMAGENET1K_V1`. You can also use `weights=VGG16_Weights.DEFAULT` to get the most up-to-date weights.
+  warnings.warn(msg)
+/ocean/projects/cis250277p/dsilva3/JiT/jit_env/lib/python3.10/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.
+  warnings.warn(
+/ocean/projects/cis250277p/dsilva3/JiT/jit_env/lib/python3.10/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=VGG16_Weights.IMAGENET1K_V1`. You can also use `weights=VGG16_Weights.DEFAULT` to get the most up-to-date weights.
+  warnings.warn(msg)
+/ocean/projects/cis250277p/dsilva3/JiT/src/torch-fidelity/disc/lpips.py:89: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  state = torch.load(ckpt, map_location=torch.device("cpu"))
+[08:32:37.894977] [LPIPS] Loaded pretrained weights from /ocean/projects/cis250277p/dsilva3/JiT/src/torch-fidelity/disc/.caches/vgg.pth
+[08:32:37.895449] Model = Denoiser(
+  (net): DINOv2Diffuser(
+    (backbone): DinoVisionTransformer(
+      (patch_embed): PatchEmbed(
+        (proj): Conv2d(3, 768, kernel_size=(14, 14), stride=(14, 14))
+        (norm): Identity()
+      )
+      (blocks): ModuleList(
+        (0-11): 12 x NestedTensorBlock(
+          (norm1): LayerNorm((768,), eps=1e-06, elementwise_affine=True)
+          (attn): MemEffAttention(
+            (qkv): Linear(in_features=768, out_features=2304, bias=True)
+            (proj): Linear(in_features=768, out_features=768, bias=True)
+            (proj_drop): Dropout(p=0.0, inplace=False)
+          )
+          (ls1): LayerScale()
+          (drop_path1): Identity()
+          (norm2): LayerNorm((768,), eps=1e-06, elementwise_affine=True)
+          (mlp): Mlp(
+            (fc1): Linear(in_features=768, out_features=3072, bias=True)
+            (act): GELU(approximate='none')
+            (fc2): Linear(in_features=3072, out_features=768, bias=True)
+            (drop): Dropout(p=0.0, inplace=False)
+          )
+          (ls2): LayerScale()
+          (drop_path2): Identity()
+        )
+      )
+      (norm): LayerNorm((768,), eps=1e-06, elementwise_affine=False)
+      (head): Identity()
+    )
+    (t_embedder): TimestepEmbedder(
+      (mlp): Sequential(
+        (0): Linear(in_features=256, out_features=768, bias=True)
+        (1): SiLU()
+        (2): Linear(in_features=768, out_features=768, bias=True)
+      )
+    )
+    (y_embedder): LabelEmbedder(
+      (embedding_table): Embedding(1001, 768)
+    )
+    (decoder): GeneralDecoder(
+      (decoder_embed): Linear(in_features=768, out_features=1152, bias=True)
+      (decoder_layers): ModuleList(
+        (0-27): 28 x ViTMAELayer(
+          (attention): ViTMAEAttention(
+            (attention): ViTMAESelfAttention(
+              (query): Linear(in_features=1152, out_features=1152, bias=True)
+              (key): Linear(in_features=1152, out_features=1152, bias=True)
+              (value): Linear(in_features=1152, out_features=1152, bias=True)
+              (dropout): Dropout(p=0.0, inplace=False)
+            )
+            (output): ViTMAESelfOutput(
+              (dense): Linear(in_features=1152, out_features=1152, bias=True)
+              (dropout): Dropout(p=0.0, inplace=False)
+            )
+          )
+          (intermediate): ViTMAEIntermediate(
+            (dense): Linear(in_features=1152, out_features=4096, bias=True)
+            (intermediate_act_fn): GELUActivation()
+          )
+          (output): ViTMAEOutput(
+            (dense): Linear(in_features=4096, out_features=1152, bias=True)
+            (dropout): Dropout(p=0.0, inplace=False)
+          )
+          (layernorm_before): LayerNorm((1152,), eps=1e-12, elementwise_affine=True)
+          (layernorm_after): LayerNorm((1152,), eps=1e-12, elementwise_affine=True)
+        )
+      )
+      (decoder_norm): LayerNorm((1152,), eps=1e-12, elementwise_affine=True)
+      (decoder_pred): Linear(in_features=1152, out_features=768, bias=True)
+    )
+    (mask_head): Linear(in_features=768, out_features=1, bias=True)
+  )
+  (teacher_model): DINOv2Diffuser(
+    (backbone): DinoVisionTransformer(
+      (patch_embed): PatchEmbed(
+        (proj): Conv2d(3, 768, kernel_size=(14, 14), stride=(14, 14))
+        (norm): Identity()
+      )
+      (blocks): ModuleList(
+        (0-11): 12 x NestedTensorBlock(
+          (norm1): LayerNorm((768,), eps=1e-06, elementwise_affine=True)
+          (attn): MemEffAttention(
+            (qkv): Linear(in_features=768, out_features=2304, bias=True)
+            (proj): Linear(in_features=768, out_features=768, bias=True)
+            (proj_drop): Dropout(p=0.0, inplace=False)
+          )
+          (ls1): LayerScale()
+          (drop_path1): Identity()
+          (norm2): LayerNorm((768,), eps=1e-06, elementwise_affine=True)
+          (mlp): Mlp(
+            (fc1): Linear(in_features=768, out_features=3072, bias=True)
+            (act): GELU(approximate='none')
+            (fc2): Linear(in_features=3072, out_features=768, bias=True)
+            (drop): Dropout(p=0.0, inplace=False)
+          )
+          (ls2): LayerScale()
+          (drop_path2): Identity()
+        )
+      )
+      (norm): LayerNorm((768,), eps=1e-06, elementwise_affine=False)
+      (head): Identity()
+    )
+    (t_embedder): TimestepEmbedder(
+      (mlp): Sequential(
+        (0): Linear(in_features=256, out_features=768, bias=True)
+        (1): SiLU()
+        (2): Linear(in_features=768, out_features=768, bias=True)
+      )
+    )
+    (y_embedder): LabelEmbedder(
+      (embedding_table): Embedding(1001, 768)
+    )
+    (decoder): GeneralDecoder(
+      (decoder_embed): Linear(in_features=768, out_features=1152, bias=True)
+      (decoder_layers): ModuleList(
+        (0-27): 28 x ViTMAELayer(
+          (attention): ViTMAEAttention(
+            (attention): ViTMAESelfAttention(
+              (query): Linear(in_features=1152, out_features=1152, bias=True)
+              (key): Linear(in_features=1152, out_features=1152, bias=True)
+              (value): Linear(in_features=1152, out_features=1152, bias=True)
+              (dropout): Dropout(p=0.0, inplace=False)
+            )
+            (output): ViTMAESelfOutput(
+              (dense): Linear(in_features=1152, out_features=1152, bias=True)
+              (dropout): Dropout(p=0.0, inplace=False)
+            )
+          )
+          (intermediate): ViTMAEIntermediate(
+            (dense): Linear(in_features=1152, out_features=4096, bias=True)
+            (intermediate_act_fn): GELUActivation()
+          )
+          (output): ViTMAEOutput(
+            (dense): Linear(in_features=4096, out_features=1152, bias=True)
+            (dropout): Dropout(p=0.0, inplace=False)
+          )
+          (layernorm_before): LayerNorm((1152,), eps=1e-12, elementwise_affine=True)
+          (layernorm_after): LayerNorm((1152,), eps=1e-12, elementwise_affine=True)
+        )
+      )
+      (decoder_norm): LayerNorm((1152,), eps=1e-12, elementwise_affine=True)
+      (decoder_pred): Linear(in_features=1152, out_features=768, bias=True)
+    )
+    (mask_head): Linear(in_features=768, out_features=1, bias=True)
+  )
+  (lpips_model): LPIPS(
+    (scaling_layer): ScalingLayer()
+    (net): VGG16FeatureExtractor(
+      (slice1): Sequential(
+        (0): Conv2d(3, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+        (1): ReLU(inplace=True)
+        (2): Conv2d(64, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+        (3): ReLU(inplace=True)
+      )
+      (slice2): Sequential(
+        (0): MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+        (1): Conv2d(64, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+        (2): ReLU(inplace=True)
+        (3): Conv2d(128, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+        (4): ReLU(inplace=True)
+      )
+      (slice3): Sequential(
+        (0): MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+        (1): Conv2d(128, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+        (2): ReLU(inplace=True)
+        (3): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+        (4): ReLU(inplace=True)
+        (5): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+        (6): ReLU(inplace=True)
+      )
+      (slice4): Sequential(
+        (0): MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+        (1): Conv2d(256, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+        (2): ReLU(inplace=True)
+        (3): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+        (4): ReLU(inplace=True)
+        (5): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+        (6): ReLU(inplace=True)
+      )
+      (slice5): Sequential(
+        (0): MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+        (1): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+        (2): ReLU(inplace=True)
+        (3): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+        (4): ReLU(inplace=True)
+        (5): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+        (6): ReLU(inplace=True)
+      )
+    )
+    (lin0): NetLinLayer(
+      (model): Sequential(
+        (0): Dropout(p=0.5, inplace=False)
+        (1): Conv2d(64, 1, kernel_size=(1, 1), stride=(1, 1), bias=False)
+      )
+    )
+    (lin1): NetLinLayer(
+      (model): Sequential(
+        (0): Dropout(p=0.5, inplace=False)
+        (1): Conv2d(128, 1, kernel_size=(1, 1), stride=(1, 1), bias=False)
+      )
+    )
+    (lin2): NetLinLayer(
+      (model): Sequential(
+        (0): Dropout(p=0.5, inplace=False)
+        (1): Conv2d(256, 1, kernel_size=(1, 1), stride=(1, 1), bias=False)
+      )
+    )
+    (lin3): NetLinLayer(
+      (model): Sequential(
+        (0): Dropout(p=0.5, inplace=False)
+        (1): Conv2d(512, 1, kernel_size=(1, 1), stride=(1, 1), bias=False)
+      )
+    )
+    (lin4): NetLinLayer(
+      (model): Sequential(
+        (0): Dropout(p=0.5, inplace=False)
+        (1): Conv2d(512, 1, kernel_size=(1, 1), stride=(1, 1), bias=False)
+      )
+    )
+  )
+)
+[08:32:37.903091] Number of trainable parameters: 503.493761M
+/ocean/projects/cis250277p/dsilva3/JiT/src/torch-fidelity/disc/lpips.py:89: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  state = torch.load(ckpt, map_location=torch.device("cpu"))
+/ocean/projects/cis250277p/dsilva3/JiT/src/torch-fidelity/disc/lpips.py:89: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  state = torch.load(ckpt, map_location=torch.device("cpu"))
+/ocean/projects/cis250277p/dsilva3/JiT/src/torch-fidelity/disc/lpips.py:89: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  state = torch.load(ckpt, map_location=torch.device("cpu"))
+[08:32:38.715257] Base lr: 5.00e-05
+[08:32:38.715379] Actual lr: 6.25e-06
+[08:32:38.715404] Effective batch size: 32
+[08:32:39.828424] AdamW (
+Parameter Group 0
+    amsgrad: False
+    betas: (0.9, 0.95)
+    capturable: False
+    differentiable: False
+    eps: 1e-08
+    foreach: None
+    fused: None
+    lr: 6.25e-06
+    maximize: False
+    weight_decay: 0.0
+
+Parameter Group 1
+    amsgrad: False
+    betas: (0.9, 0.95)
+    capturable: False
+    differentiable: False
+    eps: 1e-08
+    foreach: None
+    fused: None
+    lr: 6.25e-06
+    maximize: False
+    weight_decay: 0.0
+)
+wandb: Currently logged in as: duarte-leao (duarte-leao-instituto-superior-t-cnico) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: Tracking run with wandb version 0.23.0
+wandb: Run data is saved locally in /ocean/projects/cis250277p/dsilva3/JiT/wandb/run-20251202_083240-cu5z0565
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run dinov2-jit-b14-img224_decoder_and_lpips_no_feat
+wandb: ⭐️ View project at https://wandb.ai/duarte-leao-instituto-superior-t-cnico/dinov2-jit-validation
+wandb: 🚀 View run at https://wandb.ai/duarte-leao-instituto-superior-t-cnico/dinov2-jit-validation/runs/cu5z0565
+[08:32:41.643654] W&B logging enabled.
+[08:32:41.759369] Training from scratch
+[08:32:41.759809] Start training for 500 epochs
+[08:32:41.767447] log_dir: /ocean/projects/cis250277p/dsilva3/JiT/jit_experiments/output_dinov2_decoder_and_Lpips_no_feat
+[08:32:41.767817] Curriculum: stage 0, p_max=1.00, t_max=1.00, backbone=Unfrozen
+[08:33:00.727790] Epoch: [0]  [    0/40036]  eta: 8 days, 18:50:35  lr: 0.000000  stage: 0  x_mse: 0.302828  mask_loss: 0.568951  feature_loss: 32.694004  lpips_loss: 0.101174  loss: 1.1064 (1.1064)  time: 18.9588  data: 11.0178  max mem: 29150
+[08:33:26.072674] Epoch: [0]  [   20/40036]  eta: 23:26:58  lr: 0.000000  stage: 0  x_mse: 0.219209  mask_loss: 0.546264  feature_loss: 29.956188  lpips_loss: 0.087368  loss: 0.8070 (0.9277)  time: 1.2671  data: 0.0001  max mem: 29150
+[08:33:51.138856] Epoch: [0]  [   40/40036]  eta: 18:47:46  lr: 0.000000  stage: 0  x_mse: 0.251290  mask_loss: 0.572052  feature_loss: 31.832640  lpips_loss: 0.124837  loss: 0.8540 (0.9517)  time: 1.2531  data: 0.0001  max mem: 29150
+[08:34:16.242170] Epoch: [0]  [   60/40036]  eta: 17:11:47  lr: 0.000000  stage: 0  x_mse: 0.212496  mask_loss: 0.541693  feature_loss: 31.619413  lpips_loss: 0.080267  loss: 0.8546 (0.9369)  time: 1.2550  data: 0.0001  max mem: 29150
+[08:34:41.350996] Epoch: [0]  [   80/40036]  eta: 16:23:03  lr: 0.000000  stage: 0  x_mse: 0.250659  mask_loss: 0.549245  feature_loss: 28.930613  lpips_loss: 0.096949  loss: 0.7787 (0.9152)  time: 1.2553  data: 0.0002  max mem: 29150
+[08:35:06.462105] Epoch: [0]  [  100/40036]  eta: 15:53:27  lr: 0.000000  stage: 0  x_mse: 0.298199  mask_loss: 0.559422  feature_loss: 34.167351  lpips_loss: 0.072301  loss: 0.8495 (0.9065)  time: 1.2554  data: 0.0001  max mem: 29150
+[08:35:31.580387] Epoch: [0]  [  120/40036]  eta: 15:33:33  lr: 0.000000  stage: 0  x_mse: 0.267803  mask_loss: 0.572642  feature_loss: 32.366184  lpips_loss: 0.094594  loss: 0.8278 (0.8912)  time: 1.2558  data: 0.0002  max mem: 29150
+[08:35:56.712371] Epoch: [0]  [  140/40036]  eta: 15:19:14  lr: 0.000000  stage: 0  x_mse: 0.164375  mask_loss: 0.594914  feature_loss: 29.386305  lpips_loss: 0.111048  loss: 0.7863 (0.8904)  time: 1.2565  data: 0.0001  max mem: 29150
+[08:36:21.859663] Epoch: [0]  [  160/40036]  eta: 15:08:27  lr: 0.000000  stage: 0  x_mse: 0.295593  mask_loss: 0.562386  feature_loss: 32.599094  lpips_loss: 0.037286  loss: 0.8169 (0.8858)  time: 1.2573  data: 0.0002  max mem: 29150
+[08:36:46.984263] Epoch: [0]  [  180/40036]  eta: 14:59:51  lr: 0.000000  stage: 0  x_mse: 0.174947  mask_loss: 0.550893  feature_loss: 34.889099  lpips_loss: 0.117399  loss: 0.9173 (0.8968)  time: 1.2561  data: 0.0001  max mem: 29150
+[08:37:12.092459] Epoch: [0]  [  200/40036]  eta: 14:52:50  lr: 0.000000  stage: 0  x_mse: 0.235723  mask_loss: 0.546927  feature_loss: 33.245300  lpips_loss: 0.058264  loss: 0.8466 (0.8947)  time: 1.2553  data: 0.0001  max mem: 29150
+[08:37:37.197502] Epoch: [0]  [  220/40036]  eta: 14:47:00  lr: 0.000000  stage: 0  x_mse: 0.294129  mask_loss: 0.585337  feature_loss: 28.824865  lpips_loss: 0.098045  loss: 0.8023 (0.8897)  time: 1.2551  data: 0.0001  max mem: 29150
+[08:38:02.340951] Epoch: [0]  [  240/40036]  eta: 14:42:11  lr: 0.000000  stage: 0  x_mse: 0.267578  mask_loss: 0.565783  feature_loss: 27.540121  lpips_loss: 0.111272  loss: 0.8947 (0.9018)  time: 1.2570  data: 0.0001  max mem: 29150
+[08:38:27.422360] Epoch: [0]  [  260/40036]  eta: 14:37:52  lr: 0.000000  stage: 0  x_mse: 0.263530  mask_loss: 0.543391  feature_loss: 33.662453  lpips_loss: 0.108582  loss: 0.8965 (0.9043)  time: 1.2539  data: 0.0001  max mem: 29150
+[08:38:52.477167] Epoch: [0]  [  280/40036]  eta: 14:34:03  lr: 0.000000  stage: 0  x_mse: 0.188687  mask_loss: 0.553741  feature_loss: 31.528387  lpips_loss: 0.108470  loss: 0.7386 (0.8982)  time: 1.2526  data: 0.0001  max mem: 29150
+[08:39:17.549480] Epoch: [0]  [  300/40036]  eta: 14:30:43  lr: 0.000000  stage: 0  x_mse: 0.300579  mask_loss: 0.576524  feature_loss: 30.278925  lpips_loss: 0.103727  loss: 0.8099 (0.8964)  time: 1.2534  data: 0.0001  max mem: 29150
+[08:39:42.615188] Epoch: [0]  [  320/40036]  eta: 14:27:44  lr: 0.000000  stage: 0  x_mse: 0.301850  mask_loss: 0.546690  feature_loss: 33.980511  lpips_loss: 0.091087  loss: 0.8264 (0.8928)  time: 1.2532  data: 0.0001  max mem: 29150
+[08:40:07.711819] Epoch: [0]  [  340/40036]  eta: 14:25:07  lr: 0.000000  stage: 0  x_mse: 0.348680  mask_loss: 0.545197  feature_loss: 36.083469  lpips_loss: 0.047319  loss: 0.7546 (0.8904)  time: 1.2547  data: 0.0001  max mem: 29150
+[08:40:32.806531] Epoch: [0]  [  360/40036]  eta: 14:22:45  lr: 0.000000  stage: 0  x_mse: 0.230289  mask_loss: 0.576237  feature_loss: 28.801765  lpips_loss: 0.110130  loss: 0.7628 (0.8858)  time: 1.2546  data: 0.0002  max mem: 29150
+[08:40:57.883901] Epoch: [0]  [  380/40036]  eta: 14:20:33  lr: 0.000000  stage: 0  x_mse: 0.223963  mask_loss: 0.546274  feature_loss: 27.751696  lpips_loss: 0.089700  loss: 0.8131 (0.8884)  time: 1.2538  data: 0.0002  max mem: 29150
+[08:41:22.995600] Epoch: [0]  [  400/40036]  eta: 14:18:34  lr: 0.000000  stage: 0  x_mse: 0.205584  mask_loss: 0.569721  feature_loss: 31.389635  lpips_loss: 0.093637  loss: 0.7779 (0.8844)  time: 1.2555  data: 0.0001  max mem: 29150
+[08:41:48.078594] Epoch: [0]  [  420/40036]  eta: 14:16:43  lr: 0.000000  stage: 0  x_mse: 0.323929  mask_loss: 0.575860  feature_loss: 32.009224  lpips_loss: 0.073005  loss: 0.9119 (0.8852)  time: 1.2541  data: 0.0001  max mem: 29150
+[08:42:13.163652] Epoch: [0]  [  440/40036]  eta: 14:14:59  lr: 0.000000  stage: 0  x_mse: 0.312542  mask_loss: 0.559915  feature_loss: 29.245356  lpips_loss: 0.127315  loss: 0.8809 (0.8865)  time: 1.2542  data: 0.0001  max mem: 29150
+[08:42:38.244867] Epoch: [0]  [  460/40036]  eta: 14:13:21  lr: 0.000000  stage: 0  x_mse: 0.228882  mask_loss: 0.571810  feature_loss: 31.657995  lpips_loss: 0.085153  loss: 0.7789 (0.8820)  time: 1.2540  data: 0.0001  max mem: 29150
+[08:43:03.309877] Epoch: [0]  [  480/40036]  eta: 14:11:49  lr: 0.000000  stage: 0  x_mse: 0.210525  mask_loss: 0.569614  feature_loss: 31.999109  lpips_loss: 0.063053  loss: 0.6989 (0.8771)  time: 1.2532  data: 0.0001  max mem: 29150
+[08:43:28.359914] Epoch: [0]  [  500/40036]  eta: 14:10:20  lr: 0.000000  stage: 0  x_mse: 0.198661  mask_loss: 0.594404  feature_loss: 36.675056  lpips_loss: 0.125849  loss: 0.7916 (0.8748)  time: 1.2524  data: 0.0001  max mem: 29150
+[08:43:53.427187] Epoch: [0]  [  520/40036]  eta: 14:08:58  lr: 0.000000  stage: 0  x_mse: 0.241484  mask_loss: 0.558808  feature_loss: 29.127613  lpips_loss: 0.137057  loss: 0.8437 (0.8736)  time: 1.2533  data: 0.0002  max mem: 29150
+[08:44:18.513305] Epoch: [0]  [  540/40036]  eta: 14:07:41  lr: 0.000000  stage: 0  x_mse: 0.230689  mask_loss: 0.552514  feature_loss: 33.881145  lpips_loss: 0.077545  loss: 0.7729 (0.8687)  time: 1.2542  data: 0.0001  max mem: 29150
+[08:44:43.604382] Epoch: [0]  [  560/40036]  eta: 14:06:29  lr: 0.000000  stage: 0  x_mse: 0.261624  mask_loss: 0.573000  feature_loss: 33.899895  lpips_loss: 0.100278  loss: 0.8156 (0.8680)  time: 1.2545  data: 0.0001  max mem: 29150
+[08:45:08.701549] Epoch: [0]  [  580/40036]  eta: 14:05:20  lr: 0.000000  stage: 0  x_mse: 0.225313  mask_loss: 0.580355  feature_loss: 33.081444  lpips_loss: 0.116938  loss: 0.7453 (0.8637)  time: 1.2548  data: 0.0002  max mem: 29150
+[08:45:33.818118] Epoch: [0]  [  600/40036]  eta: 14:04:15  lr: 0.000000  stage: 0  x_mse: 0.222842  mask_loss: 0.531467  feature_loss: 32.622612  lpips_loss: 0.043455  loss: 0.7410 (0.8608)  time: 1.2557  data: 0.0002  max mem: 29150
+[08:45:58.919398] Epoch: [0]  [  620/40036]  eta: 14:03:12  lr: 0.000000  stage: 0  x_mse: 0.221044  mask_loss: 0.547395  feature_loss: 30.987303  lpips_loss: 0.101765  loss: 0.7179 (0.8587)  time: 1.2549  data: 0.0002  max mem: 29150
+[08:46:24.037778] Epoch: [0]  [  640/40036]  eta: 14:02:12  lr: 0.000000  stage: 0  x_mse: 0.209702  mask_loss: 0.554451  feature_loss: 32.938309  lpips_loss: 0.081229  loss: 0.6847 (0.8541)  time: 1.2558  data: 0.0002  max mem: 29150
+[08:46:49.194293] Epoch: [0]  [  660/40036]  eta: 14:01:17  lr: 0.000000  stage: 0  x_mse: 0.230441  mask_loss: 0.559416  feature_loss: 32.154011  lpips_loss: 0.075293  loss: 0.6833 (0.8511)  time: 1.2577  data: 0.0002  max mem: 29150
+[08:47:14.669116] Epoch: [0]  [  680/40036]  eta: 14:00:41  lr: 0.000000  stage: 0  x_mse: 0.268979  mask_loss: 0.577041  feature_loss: 30.156214  lpips_loss: 0.078971  loss: 0.7451 (0.8473)  time: 1.2736  data: 0.0002  max mem: 29150
+[08:47:39.777764] Epoch: [0]  [  700/40036]  eta: 13:59:46  lr: 0.000000  stage: 0  x_mse: 0.219257  mask_loss: 0.566380  feature_loss: 34.223835  lpips_loss: 0.061349  loss: 0.6722 (0.8435)  time: 1.2553  data: 0.0002  max mem: 29150
+[08:48:04.896323] Epoch: [0]  [  720/40036]  eta: 13:58:53  lr: 0.000000  stage: 0  x_mse: 0.268534  mask_loss: 0.538603  feature_loss: 30.008213  lpips_loss: 0.098204  loss: 0.7970 (0.8428)  time: 1.2558  data: 0.0002  max mem: 29150
+[08:48:30.019579] Epoch: [0]  [  740/40036]  eta: 13:58:02  lr: 0.000000  stage: 0  x_mse: 0.223509  mask_loss: 0.551588  feature_loss: 35.055481  lpips_loss: 0.063483  loss: 0.6982 (0.8405)  time: 1.2560  data: 0.0002  max mem: 29150
+[08:48:55.164976] Epoch: [0]  [  760/40036]  eta: 13:57:13  lr: 0.000000  stage: 0  x_mse: 0.296323  mask_loss: 0.552961  feature_loss: 28.222292  lpips_loss: 0.111009  loss: 0.7267 (0.8387)  time: 1.2571  data: 0.0002  max mem: 29150
+[08:49:20.294488] Epoch: [0]  [  780/40036]  eta: 13:56:25  lr: 0.000000  stage: 0  x_mse: 0.228634  mask_loss: 0.542424  feature_loss: 34.334312  lpips_loss: 0.064210  loss: 0.6418 (0.8338)  time: 1.2564  data: 0.0002  max mem: 29150
+[08:49:45.481010] Epoch: [0]  [  800/40036]  eta: 13:55:40  lr: 0.000000  stage: 0  x_mse: 0.227010  mask_loss: 0.565743  feature_loss: 29.497536  lpips_loss: 0.123481  loss: 0.7957 (0.8333)  time: 1.2591  data: 0.0002  max mem: 29150
+[08:50:10.648377] Epoch: [0]  [  820/40036]  eta: 13:54:56  lr: 0.000000  stage: 0  x_mse: 0.243858  mask_loss: 0.567138  feature_loss: 35.115005  lpips_loss: 0.063054  loss: 0.6351 (0.8295)  time: 1.2582  data: 0.0003  max mem: 29150
+[08:50:35.829446] Epoch: [0]  [  840/40036]  eta: 13:54:13  lr: 0.000000  stage: 0  x_mse: 0.214307  mask_loss: 0.531708  feature_loss: 29.411966  lpips_loss: 0.096828  loss: 0.6645 (0.8268)  time: 1.2589  data: 0.0002  max mem: 29150
+[08:51:00.995763] Epoch: [0]  [  860/40036]  eta: 13:53:30  lr: 0.000000  stage: 0  x_mse: 0.202852  mask_loss: 0.528952  feature_loss: 34.943752  lpips_loss: 0.051479  loss: 0.7502 (0.8246)  time: 1.2582  data: 0.0002  max mem: 29150
+[08:51:26.127539] Epoch: [0]  [  880/40036]  eta: 13:52:47  lr: 0.000000  stage: 0  x_mse: 0.173234  mask_loss: 0.567722  feature_loss: 34.344299  lpips_loss: 0.077116  loss: 0.7230 (0.8228)  time: 1.2564  data: 0.0002  max mem: 29150
+[08:51:51.371439] Epoch: [0]  [  900/40036]  eta: 13:52:09  lr: 0.000000  stage: 0  x_mse: 0.295833  mask_loss: 0.600877  feature_loss: 32.422077  lpips_loss: 0.062954  loss: 0.6322 (0.8194)  time: 1.2620  data: 0.0002  max mem: 29150
+[08:52:16.546874] Epoch: [0]  [  920/40036]  eta: 13:51:29  lr: 0.000000  stage: 0  x_mse: 0.236655  mask_loss: 0.536980  feature_loss: 34.193584  lpips_loss: 0.056771  loss: 0.6923 (0.8165)  time: 1.2586  data: 0.0002  max mem: 29150
+[08:52:41.693149] Epoch: [0]  [  940/40036]  eta: 13:50:48  lr: 0.000000  stage: 0  x_mse: 0.250448  mask_loss: 0.541004  feature_loss: 32.223572  lpips_loss: 0.041861  loss: 0.6401 (0.8129)  time: 1.2572  data: 0.0002  max mem: 29150
+[08:53:06.829324] Epoch: [0]  [  960/40036]  eta: 13:50:08  lr: 0.000000  stage: 0  x_mse: 0.104462  mask_loss: 0.556946  feature_loss: 32.067970  lpips_loss: 0.122642  loss: 0.6185 (0.8093)  time: 1.2566  data: 0.0002  max mem: 29150
+[08:53:31.977547] Epoch: [0]  [  980/40036]  eta: 13:49:28  lr: 0.000000  stage: 0  x_mse: 0.184098  mask_loss: 0.544889  feature_loss: 32.914810  lpips_loss: 0.084221  loss: 0.6713 (0.8064)  time: 1.2573  data: 0.0002  max mem: 29150
+[08:53:57.120702] Epoch: [0]  [ 1000/40036]  eta: 13:48:50  lr: 0.000000  stage: 0  x_mse: 0.287326  mask_loss: 0.568549  feature_loss: 31.172127  lpips_loss: 0.090799  loss: 0.5847 (0.8026)  time: 1.2570  data: 0.0002  max mem: 29150
+[08:54:22.271039] Epoch: [0]  [ 1020/40036]  eta: 13:48:11  lr: 0.000000  stage: 0  x_mse: 0.141264  mask_loss: 0.552720  feature_loss: 31.242151  lpips_loss: 0.115606  loss: 0.5894 (0.7990)  time: 1.2574  data: 0.0002  max mem: 29150
+[08:54:47.404814] Epoch: [0]  [ 1040/40036]  eta: 13:47:33  lr: 0.000000  stage: 0  x_mse: 0.218485  mask_loss: 0.560927  feature_loss: 31.880291  lpips_loss: 0.060993  loss: 0.6147 (0.7959)  time: 1.2566  data: 0.0002  max mem: 29150
+[08:55:12.569887] Epoch: [0]  [ 1060/40036]  eta: 13:46:57  lr: 0.000000  stage: 0  x_mse: 0.178999  mask_loss: 0.566866  feature_loss: 30.141191  lpips_loss: 0.093149  loss: 0.5522 (0.7917)  time: 1.2582  data: 0.0002  max mem: 29150
+[08:55:37.681511] Epoch: [0]  [ 1080/40036]  eta: 13:46:18  lr: 0.000000  stage: 0  x_mse: 0.181839  mask_loss: 0.544103  feature_loss: 30.739527  lpips_loss: 0.102048  loss: 0.5670 (0.7881)  time: 1.2555  data: 0.0002  max mem: 29150
+[08:56:02.814666] Epoch: [0]  [ 1100/40036]  eta: 13:45:41  lr: 0.000000  stage: 0  x_mse: 0.148124  mask_loss: 0.530060  feature_loss: 30.332542  lpips_loss: 0.117248  loss: 0.5507 (0.7840)  time: 1.2555  data: 0.0002  max mem: 29150
+[08:56:27.947081] Epoch: [0]  [ 1120/40036]  eta: 13:45:04  lr: 0.000000  stage: 0  x_mse: 0.224213  mask_loss: 0.592587  feature_loss: 28.727945  lpips_loss: 0.149193  loss: 0.5539 (0.7806)  time: 1.2565  data: 0.0001  max mem: 29150

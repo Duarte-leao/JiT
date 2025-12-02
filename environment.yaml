@@ -19,3 +19,5 @@ dependencies:
     - gdown==5.2.0
     - -e git+https://github.com/LTH14/torch-fidelity.git@master#egg=torch-fidelity
     - transformers
+    - lpips
+    - wandb
