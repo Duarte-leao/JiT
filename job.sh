@@ -16,7 +16,7 @@ eval "$(conda shell.bash hook)"
 # This points exactly to the folder you just created
 conda activate /ocean/projects/cis250277p/dsilva3/JiT/jit_env
 
-export WANDB_API_KEY="bc7bc5f8d815c5ba398c206a920fbef4582a51a6"
+
 
 # 3. Navigate to your folder
 cd /ocean/projects/cis250277p/dsilva3/JiT
